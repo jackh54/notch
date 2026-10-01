@@ -50,7 +50,12 @@ struct ExpandedItem {
 class BoringViewCoordinator: ObservableObject {
     static let shared = BoringViewCoordinator()
 
-    @Published var currentView: NotchViews = .home
+    @Published var currentView: NotchViews = BoringViewCoordinator.defaultView
+
+    /// The tab the notch opens on when nothing else claims it.
+    static var defaultView: NotchViews {
+        Defaults[.enableAgents] && Defaults[.agentsDefaultTab] ? .agents : .home
+    }
     @Published var helloAnimationRunning: Bool = false
     private var sneakPeekDispatch: DispatchWorkItem?
     private var expandingViewDispatch: DispatchWorkItem?
@@ -66,7 +71,7 @@ class BoringViewCoordinator: ObservableObject {
             if !alwaysShowTabs {
                 openLastTabByDefault = false
                 if ShelfStateViewModel.shared.isEmpty || !Defaults[.openShelfByDefault] {
-                    currentView = .home
+                    currentView = Self.defaultView
                 }
             }
         }
@@ -295,6 +300,6 @@ class BoringViewCoordinator: ObservableObject {
     }
     
     func showEmpty() {
-        currentView = .home
+        currentView = Self.defaultView
     }
 }

@@ -23,6 +23,7 @@ struct ContentView: View {
     @ObservedObject var batteryModel = BatteryStatusViewModel.shared
     @ObservedObject var brightnessManager = BrightnessManager.shared
     @ObservedObject var volumeManager = VolumeManager.shared
+    @ObservedObject var agents = AgentManager.shared
     @State private var hoverTask: Task<Void, Never>?
     @State private var isHovering: Bool = false
     @State private var anyDropDebounceTask: Task<Void, Never>?
@@ -58,6 +59,17 @@ struct ContentView: View {
         )
     }
 
+    /// Agent sessions take the closed notch over music and the idle face.
+    private var showsAgentLiveActivity: Bool {
+        agents.hasLiveActivity && !coordinator.expandingView.show
+            && vm.notchState == .closed && !vm.hideOnClosed
+    }
+
+    private var showsAgentBanner: Bool {
+        agents.banner != nil && Defaults[.enableAgents] && !coordinator.sneakPeek.show
+            && vm.notchState == .closed && !vm.hideOnClosed
+    }
+
     private var computedChinWidth: CGFloat {
         var chinWidth: CGFloat = vm.closedNotchSize.width
 
@@ -65,6 +77,8 @@ struct ContentView: View {
             && vm.notchState == .closed && Defaults[.showPowerStatusNotifications]
         {
             chinWidth = 640
+        } else if showsAgentLiveActivity {
+            chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
         } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music)
             && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle)
             && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed
@@ -159,6 +173,11 @@ struct ContentView: View {
                                 }
                             }
                         }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .agentNeedsAttention)) { _ in
+                        guard Defaults[.agentsOpenOnApproval], vm.notchState == .closed, !vm.hideOnClosed else { return }
+                        coordinator.currentView = .agents
+                        doOpen()
                     }
                     .onChange(of: vm.notchState) { _, newState in
                         if newState == .closed && isHovering {
@@ -287,6 +306,9 @@ struct ContentView: View {
                       } else if coordinator.sneakPeek.show && Defaults[.inlineHUD] && (coordinator.sneakPeek.type != .music) && (coordinator.sneakPeek.type != .battery) && vm.notchState == .closed {
                           InlineHUD(type: $coordinator.sneakPeek.type, value: $coordinator.sneakPeek.value, icon: $coordinator.sneakPeek.icon, hoverAnimation: $isHovering, gestureProgress: $gestureProgress)
                               .transition(.opacity)
+                      } else if showsAgentLiveActivity {
+                          AgentLiveActivity()
+                              .frame(alignment: .center)
                       } else if (!coordinator.expandingView.show || coordinator.expandingView.type == .music) && vm.notchState == .closed && (musicManager.isPlaying || !musicManager.isPlayerIdle) && coordinator.musicLiveActivityEnabled && !vm.hideOnClosed {
                           MusicLiveActivity()
                               .frame(alignment: .center)
@@ -335,9 +357,14 @@ struct ContentView: View {
                               }
                           }
                       }
+
+                      if showsAgentBanner, let banner = agents.banner {
+                          AgentBannerView(banner: banner)
+                              .transition(.opacity)
+                      }
                   }
               }
-              .conditionalModifier((coordinator.sneakPeek.show && (coordinator.sneakPeek.type == .music) && vm.notchState == .closed && !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard) || (coordinator.sneakPeek.show && (coordinator.sneakPeek.type != .music) && (vm.notchState == .closed))) { view in
+              .conditionalModifier(showsAgentBanner || (coordinator.sneakPeek.show && (coordinator.sneakPeek.type == .music) && vm.notchState == .closed && !vm.hideOnClosed && Defaults[.sneakPeekStyles] == .standard) || (coordinator.sneakPeek.show && (coordinator.sneakPeek.type != .music) && (vm.notchState == .closed))) { view in
                   view
                       .fixedSize()
               }
@@ -349,6 +376,8 @@ struct ContentView: View {
                         NotchHomeView(albumArtNamespace: albumArtNamespace)
                     case .shelf:
                         ShelfView()
+                    case .agents:
+                        AgentsView()
                     }
                 }
                 .transition(

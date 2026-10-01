@@ -30,6 +30,9 @@ struct SettingsView: View {
                 NavigationLink(value: "General") {
                     Label("General", systemImage: "gear")
                 }
+                NavigationLink(value: "Agents") {
+                    Label("Agents", systemImage: "sparkle")
+                }
                 NavigationLink(value: "Appearance") {
                     Label("Appearance", systemImage: "eye")
                 }
@@ -73,6 +76,8 @@ struct SettingsView: View {
                 switch selectedTab {
                 case "General":
                     GeneralSettings()
+                case "Agents":
+                    AgentsSettings()
                 case "Appearance":
                     Appearance()
                 case "Media":

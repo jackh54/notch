@@ -61,6 +61,7 @@ class BoringNotchSkyLightWindow: NSPanel {
         level = .mainMenu + 3
         hasShadow = false
         isReleasedWhenClosed = false
+        becomesKeyOnlyIfNeeded = true
         
         // Force dark appearance regardless of system setting
         appearance = NSAppearance(named: .darkAqua)
@@ -109,6 +110,8 @@ class BoringNotchSkyLightWindow: NSPanel {
     
     private var observers: Set<AnyCancellable> = []
     
-    override var canBecomeKey: Bool { false }
+    // Only the Agents tab has a text field; take key focus just for that so typing works
+    // without activating the app.
+    override var canBecomeKey: Bool { BoringViewCoordinator.shared.currentView == .agents }
     override var canBecomeMain: Bool { false }
 }

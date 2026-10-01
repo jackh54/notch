@@ -202,6 +202,10 @@ class BoringViewModel: NSObject, ObservableObject {
         if SharingStateManager.shared.preventNotchClose {
             return
         }
+        // Do not close while a prompt is being typed into the Agents tab
+        if AgentManager.shared.isComposing {
+            return
+        }
         self.notchSize = getClosedNotchSize(screenUUID: self.screenUUID)
         self.closedNotchSize = self.notchSize
         self.notchState = .closed
@@ -214,7 +218,7 @@ class BoringViewModel: NSObject, ObservableObject {
     if !ShelfStateViewModel.shared.isEmpty && Defaults[.openShelfByDefault] {
             coordinator.currentView = .shelf
         } else if !coordinator.openLastTabByDefault {
-            coordinator.currentView = .home
+            coordinator.currentView = BoringViewCoordinator.defaultView
         }
     }
 
