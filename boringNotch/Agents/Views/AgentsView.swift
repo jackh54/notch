@@ -86,7 +86,7 @@ struct AgentsView: View {
             }
         }
         .scrollIndicators(.never)
-        .frame(width: 250)
+        .frame(width: agents.hasPendingRequests ? 190 : 250)
     }
 
     private var emptyState: some View {
@@ -359,7 +359,7 @@ struct AgentDetailView: View {
             ScrollView(.vertical) {
                 (Text(approval.toolName).fontWeight(.bold).foregroundStyle(.white)
                     + Text(approval.detail.isEmpty ? "" : "  \(approval.detail)"))
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.8))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
@@ -381,10 +381,10 @@ struct AgentPillButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(.caption, design: .rounded).weight(.semibold))
+            .font(.system(.callout, design: .rounded).weight(.semibold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 3)
+            .padding(.vertical, 5)
             .background(color.opacity(configuration.isPressed ? 0.6 : 1), in: Capsule())
     }
 }
@@ -403,21 +403,22 @@ struct AgentQuestionCard: View {
     private var current: AgentQuestion { request.questions[min(index, request.questions.count - 1)] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 if request.questions.count > 1 {
                     Text("\(index + 1)/\(request.questions.count)")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(.gray)
                 }
                 Text(current.text)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                    .lineLimit(2)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             ScrollView(.vertical) {
-                VStack(spacing: 3) {
+                VStack(spacing: 5) {
                     ForEach(current.options, id: \.label) { option in
                         optionRow(option)
                     }
@@ -449,24 +450,28 @@ struct AgentQuestionCard: View {
                 choose(option.label)
             }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 if current.multiSelect {
                     Image(systemName: isPicked ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 10))
+                        .font(.system(size: 13))
                 }
-                Text(option.label)
-                    .font(.system(size: 10, weight: .semibold))
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                Text(option.detail)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.gray)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(option.label)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    if !option.detail.isEmpty {
+                        Text(option.detail)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.gray)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .background(Color.white.opacity(isPicked ? 0.22 : 0.1), in: RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(isPicked ? 0.22 : 0.1), in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

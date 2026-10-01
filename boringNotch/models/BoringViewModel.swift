@@ -189,8 +189,20 @@ class BoringViewModel: NSObject, ObservableObject {
         return false
     }
 
+    /// The open size for the current content: taller while the Agents tab shows a pending request.
+    private var currentOpenSize: CGSize {
+        coordinator.currentView == .agents && AgentManager.shared.hasPendingRequests
+            ? agentRequestNotchSize : openNotchSize
+    }
+
+    /// Re-applies the open size after the tab or the pending requests change.
+    func refreshOpenSize() {
+        guard notchState == .open, notchSize != currentOpenSize else { return }
+        notchSize = currentOpenSize
+    }
+
     func open() {
-        self.notchSize = openNotchSize
+        self.notchSize = currentOpenSize
         self.notchState = .open
         
         // Force music information update when notch is opened

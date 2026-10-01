@@ -183,8 +183,12 @@ struct ContentView: View {
                         openAgents()
                     }
                     .onChange(of: agents.hasPendingRequests) { _, isPending in
+                        withAnimation(animationSpring) { vm.refreshOpenSize() }
                         // The request that opened the notch was answered; let it close again.
                         if !isPending { closeAgentsIfUnattended(after: .seconds(1)) }
+                    }
+                    .onChange(of: coordinator.currentView) {
+                        withAnimation(animationSpring) { vm.refreshOpenSize() }
                     }
                     .onChange(of: vm.notchState) { _, newState in
                         if newState == .closed && isHovering {
@@ -541,7 +545,7 @@ struct ContentView: View {
     /// Opens on the Agents tab without the pointer, then closes again unless the user engages with it.
     private func openAgents() {
         coordinator.currentView = .agents
-        if vm.notchState == .closed { doOpen() }
+        if vm.notchState == .closed { doOpen() } else { withAnimation(animationSpring) { vm.refreshOpenSize() } }
         closeAgentsIfUnattended(after: .seconds(6))
     }
 
@@ -641,7 +645,8 @@ struct ContentView: View {
     }
 
     private func handleUpGesture(translation: CGFloat, phase: NSEvent.Phase) {
-        guard vm.notchState == .open && !vm.isHoveringCalendar else { return }
+        // The Agents tab scrolls vertically, so an upward scroll there must not close the notch.
+        guard vm.notchState == .open && !vm.isHoveringCalendar && coordinator.currentView != .agents else { return }
 
         withAnimation(animationSpring) {
             gestureProgress = (translation / Defaults[.gestureSensitivity]) * -20
