@@ -15,6 +15,7 @@ final class AgentManager: ObservableObject {
 
     @Published private(set) var sessions: [AgentSession] = []
     @Published private(set) var approvals: [AgentApprovalRequest] = []
+    @Published private(set) var questions: [AgentQuestionRequest] = []
     @Published private(set) var banner: AgentBanner?
     @Published var lastError: String?
     /// True while the prompt field has keyboard focus; keeps the notch open.
@@ -36,6 +37,8 @@ final class AgentManager: ObservableObject {
     /// Headless tasks started from the notch, keyed by session key.
     private var localRuns: [String: AgentSession] = [:]
     private var pendingReplies: [UUID: AgentHookServer.Reply] = [:]
+    /// The original tool input of each pending question, echoed back with the answers.
+    private var questionInputs: [UUID: [String: Any]] = [:]
     private var runProcesses: [String: Process] = [:]
 
     private let server = AgentHookServer()
@@ -55,9 +58,9 @@ final class AgentManager: ObservableObject {
             Defaults[.agentsHookToken] = UUID().uuidString.replacingOccurrences(of: "-", with: "")
         }
 
-        server.onEvent = { [weak self] provider, payload, requestID, reply in
+        server.onEvent = { [weak self] provider, payload, wait, requestID, reply in
             MainActor.assumeIsolated {
-                self?.handleHook(provider: provider, payload: payload, requestID: requestID, reply: reply)
+                self?.handleHook(provider: provider, payload: payload, wait: wait, requestID: requestID, reply: reply)
             }
         }
         server.onStatus = { [weak self] in
@@ -68,7 +71,7 @@ final class AgentManager: ObservableObject {
         }
         server.onDisconnect = { [weak self] requestID in
             MainActor.assumeIsolated {
-                self?.dropApproval(requestID)
+                self?.dropRequest(requestID)
             }
         }
 
@@ -109,6 +112,7 @@ final class AgentManager: ObservableObject {
         pollTask = nil
         server.stop()
         for approval in approvals { resolve(approval, allow: nil) }
+        for question in questions { answerInAgent(question) }
         polled = []
         hookInfo = [:]
         publish()
@@ -137,6 +141,13 @@ final class AgentManager: ObservableObject {
         approvals.first { $0.sessionKey == session.id }
     }
 
+    func question(for session: AgentSession) -> AgentQuestionRequest? {
+        questions.first { $0.sessionKey == session.id }
+    }
+
+    /// True while an agent is blocked on an answer from the notch.
+    var hasPendingRequests: Bool { !approvals.isEmpty || !questions.isEmpty }
+
     /// Working directories worth offering for a new task, most recent first.
     var knownDirectories: [String] {
         var seen = Set<String>()
@@ -148,6 +159,7 @@ final class AgentManager: ObservableObject {
         let body: [String: Any] = [
             "sessions": sessions.map(\.statusJSON),
             "approvals": approvals.map { ["session": $0.sessionKey, "tool": $0.toolName, "detail": $0.detail] },
+            "questions": questions.map { ["session": $0.sessionKey, "questions": $0.questions.map(\.text)] },
         ]
         return try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
@@ -184,6 +196,9 @@ final class AgentManager: ObservableObject {
 
         for approval in approvals {
             merged[approval.sessionKey]?.state = .needsApproval
+        }
+        for question in questions where merged[question.sessionKey]?.state != .needsApproval {
+            merged[question.sessionKey]?.state = .waiting
         }
 
         let sorted = merged.values.sorted {
@@ -254,7 +269,7 @@ final class AgentManager: ObservableObject {
 
     // MARK: - Hook events
 
-    private func handleHook(provider: AgentProvider, payload: [String: Any], requestID: UUID, reply: @escaping AgentHookServer.Reply) {
+    private func handleHook(provider: AgentProvider, payload: [String: Any], wait: Int, requestID: UUID, reply: @escaping AgentHookServer.Reply) {
         guard let sessionId = payload["session_id"] as? String,
               let event = payload["hook_event_name"] as? String
         else {
@@ -277,9 +292,24 @@ final class AgentManager: ObservableObject {
         case "UserPromptSubmit":
             info.state = .working
             info.activity = "Thinking…"
+        case "PreToolUse" where toolName == AgentHookInstaller.questionTool:
+            let toolInput = payload["tool_input"] as? [String: Any]
+            let parsed = AgentQuestionRequest.questions(fromToolInput: toolInput)
+            info.state = .waiting
+            info.activity = AgentText.oneLine(parsed.first?.text ?? "Asking a question")
+            // The same tool call also arrives through the short generic hook; only the long one can wait.
+            if wait >= 60, !parsed.isEmpty, Defaults[.agentsAnswerQuestions] {
+                pendingReplies[requestID] = reply
+                questionInputs[requestID] = toolInput
+                holdsReply = true
+                questions.append(AgentQuestionRequest(id: requestID, sessionKey: key, questions: parsed))
+            }
         case "PreToolUse":
             info.state = .working
             info.activity = AgentText.oneLine(toolDetail.isEmpty ? toolName : "\(toolName): \(toolDetail)")
+        case "PermissionRequest" where toolName == AgentHookInstaller.questionTool:
+            // Reached when the question was handed back to the agent; its own dialog collects the answer.
+            info.state = .waiting
         case "PostToolUse", "PostToolUseFailure":
             info.state = .working
             dropApprovals(forSession: key)
@@ -347,14 +377,22 @@ final class AgentManager: ObservableObject {
         publish()
     }
 
-    private func dropApproval(_ id: UUID) {
-        guard pendingReplies.removeValue(forKey: id) != nil,
-              let approval = approvals.first(where: { $0.id == id })
-        else { return }
-        approvals.removeAll { $0.id == id }
-        // The prompt was answered elsewhere, so the session is moving again.
-        if hookInfo[approval.sessionKey]?.state == .needsApproval {
-            hookInfo[approval.sessionKey]?.state = .working
+    /// The hook went away before we answered: the prompt was answered elsewhere, so the session is moving again.
+    private func dropRequest(_ id: UUID) {
+        guard pendingReplies.removeValue(forKey: id) != nil else { return }
+        questionInputs[id] = nil
+
+        if let approval = approvals.first(where: { $0.id == id }) {
+            approvals.removeAll { $0.id == id }
+            if hookInfo[approval.sessionKey]?.state == .needsApproval {
+                hookInfo[approval.sessionKey]?.state = .working
+            }
+        }
+        if let question = questions.first(where: { $0.id == id }) {
+            questions.removeAll { $0.id == id }
+            if hookInfo[question.sessionKey]?.state == .waiting {
+                hookInfo[question.sessionKey]?.state = .working
+            }
         }
         publish()
     }
@@ -364,6 +402,46 @@ final class AgentManager: ObservableObject {
             pendingReplies.removeValue(forKey: approval.id)?(nil)
         }
         approvals.removeAll { $0.sessionKey == key }
+
+        for question in questions where question.sessionKey == key {
+            pendingReplies.removeValue(forKey: question.id)?(nil)
+            questionInputs[question.id] = nil
+        }
+        questions.removeAll { $0.sessionKey == key }
+    }
+
+    // MARK: - Questions
+
+    /// Sends the chosen answers back to the agent. `answers` maps each question's text to the
+    /// chosen option label, with several labels joined by ", " for multi-select questions.
+    func answer(_ question: AgentQuestionRequest, with answers: [String: String]) {
+        guard let reply = pendingReplies.removeValue(forKey: question.id) else { return }
+        var input = questionInputs.removeValue(forKey: question.id) ?? [:]
+        questions.removeAll { $0.id == question.id }
+
+        input["answers"] = answers
+        let body: [String: Any] = [
+            "hookSpecificOutput": [
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": "Answered from the notch.",
+                "updatedInput": input,
+            ]
+        ]
+        reply(try? JSONSerialization.data(withJSONObject: body))
+        hookInfo[question.sessionKey]?.state = .working
+        hookInfo[question.sessionKey]?.activity = "Thinking…"
+        hookInfo[question.sessionKey]?.updatedAt = .now
+        publish()
+    }
+
+    /// Releases the question so the agent shows its own dialog instead.
+    func answerInAgent(_ question: AgentQuestionRequest) {
+        guard let reply = pendingReplies.removeValue(forKey: question.id) else { return }
+        questionInputs[question.id] = nil
+        questions.removeAll { $0.id == question.id }
+        reply(nil)
+        publish()
     }
 
     // MARK: - Actions

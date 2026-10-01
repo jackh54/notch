@@ -17,19 +17,39 @@ enum AgentHookInstaller {
         return support.appendingPathComponent("boringNotch/\(scriptName)")
     }
 
-    /// Events we subscribe to; the value is the hook timeout in seconds.
-    private static func events(for provider: AgentProvider) -> [(name: String, timeout: Int)] {
-        let common: [(String, Int)] = [
-            ("SessionStart", 5), ("UserPromptSubmit", 5), ("PreToolUse", 5), ("PostToolUse", 5),
-            ("PermissionRequest", approvalTimeout), ("Stop", 5),
+    private struct Subscription {
+        let event: String
+        var matcher: String?
+        /// How long the hook may block, in seconds.
+        let timeout: Int
+    }
+
+    private static func subscriptions(for provider: AgentProvider) -> [Subscription] {
+        let common = [
+            Subscription(event: "SessionStart", timeout: 5),
+            Subscription(event: "UserPromptSubmit", timeout: 5),
+            Subscription(event: "PreToolUse", timeout: 5),
+            Subscription(event: "PostToolUse", timeout: 5),
+            Subscription(event: "PermissionRequest", timeout: approvalTimeout),
+            Subscription(event: "Stop", timeout: 5),
         ]
         switch provider {
-        case .claude: return common + [("Notification", 5), ("SessionEnd", 5)]
-        case .codex: return common
+        case .claude:
+            return common + [
+                // A second, long-running PreToolUse hook lets the notch answer Claude's questions.
+                Subscription(event: "PreToolUse", matcher: questionTool, timeout: approvalTimeout),
+                Subscription(event: "Notification", timeout: 5),
+                Subscription(event: "SessionEnd", timeout: 5),
+            ]
+        case .codex:
+            return common
         }
     }
 
-    /// How long a permission prompt can wait on the notch before the agent falls back to its own prompt.
+    /// The Claude Code tool that asks the user multiple-choice questions.
+    static let questionTool = "AskUserQuestion"
+
+    /// How long a permission prompt or question can wait on the notch before the agent falls back to its own prompt.
     static let approvalTimeout = 300
 
     private static func settingsURL(for provider: AgentProvider) -> URL {
@@ -44,7 +64,7 @@ enum AgentHookInstaller {
     /// Writes the forwarding script. It is silent and exits 0 when the app isn't running,
     /// so agents behave exactly as normal without the notch.
     static func writeScript() throws {
-        let url = "http://127.0.0.1:\(Defaults[.agentsHookPort])/hook/$1?token=\(Defaults[.agentsHookToken])"
+        let url = "http://127.0.0.1:\(Defaults[.agentsHookPort])/hook/$1?token=\(Defaults[.agentsHookToken])&wait=${2:-5}"
         let script = """
             #!/bin/sh
             # Forwards Claude Code / Codex hook events to the notch app.
@@ -67,8 +87,10 @@ enum AgentHookInstaller {
         guard let root = readJSON(url ?? settingsURL(for: provider)),
               let hooks = root["hooks"] as? [String: Any]
         else { return false }
-        return events(for: provider).allSatisfy { event in
-            (hooks[event.name] as? [[String: Any]] ?? []).contains(where: isOurs)
+        return subscriptions(for: provider).allSatisfy { subscription in
+            (hooks[subscription.event] as? [[String: Any]] ?? []).contains {
+                isOurs($0) && $0["matcher"] as? String == subscription.matcher
+            }
         }
     }
 
@@ -80,16 +102,20 @@ enum AgentHookInstaller {
         var root = try loadForEditing(url)
         var hooks = root["hooks"] as? [String: Any] ?? [:]
 
-        for event in events(for: provider) {
-            var groups = (hooks[event.name] as? [[String: Any]] ?? []).filter { !isOurs($0) }
-            groups.append([
+        // Replace our earlier entries rather than stacking duplicates.
+        for (name, value) in hooks {
+            hooks[name] = (value as? [[String: Any]])?.filter { !isOurs($0) } ?? value
+        }
+        for subscription in subscriptions(for: provider) {
+            var group: [String: Any] = [
                 "hooks": [[
                     "type": "command",
-                    "command": "\"\(scriptURL.path)\" \(provider.rawValue) \(event.timeout)",
-                    "timeout": event.timeout + 5,
+                    "command": "\"\(scriptURL.path)\" \(provider.rawValue) \(subscription.timeout)",
+                    "timeout": subscription.timeout + 5,
                 ]]
-            ])
-            hooks[event.name] = groups
+            ]
+            group["matcher"] = subscription.matcher
+            hooks[subscription.event] = (hooks[subscription.event] as? [[String: Any]] ?? []) + [group]
         }
 
         root["hooks"] = hooks

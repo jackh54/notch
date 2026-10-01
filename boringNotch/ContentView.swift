@@ -182,9 +182,9 @@ struct ContentView: View {
                         guard Defaults[.enableAgents] else { return }
                         openAgents()
                     }
-                    .onChange(of: agents.approvals.isEmpty) { _, isEmpty in
+                    .onChange(of: agents.hasPendingRequests) { _, isPending in
                         // The request that opened the notch was answered; let it close again.
-                        if isEmpty { closeAgentsIfUnattended(after: .seconds(1)) }
+                        if !isPending { closeAgentsIfUnattended(after: .seconds(1)) }
                     }
                     .onChange(of: vm.notchState) { _, newState in
                         if newState == .closed && isHovering {
@@ -551,8 +551,8 @@ struct ContentView: View {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                // A pending permission request keeps the notch open until it is answered.
-                guard self.vm.notchState == .open, !self.isHovering, self.agents.approvals.isEmpty,
+                // A pending permission request or question keeps the notch open until it is answered.
+                guard self.vm.notchState == .open, !self.isHovering, !self.agents.hasPendingRequests,
                       !self.vm.isBatteryPopoverActive, !SharingStateManager.shared.preventNotchClose
                 else { return }
                 self.vm.close()

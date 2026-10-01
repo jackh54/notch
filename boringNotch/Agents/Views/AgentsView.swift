@@ -43,6 +43,7 @@ struct AgentsView: View {
                         AgentDetailView(
                             session: selected,
                             approval: agents.approval(for: selected),
+                            question: agents.question(for: selected),
                             onReply: { beginReply(to: selected) }
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -279,6 +280,7 @@ struct AgentStateIndicator: View {
 struct AgentDetailView: View {
     let session: AgentSession
     let approval: AgentApprovalRequest?
+    let question: AgentQuestionRequest?
     let onReply: () -> Void
 
     @ObservedObject var agents = AgentManager.shared
@@ -299,6 +301,9 @@ struct AgentDetailView: View {
 
             if let approval {
                 approvalCard(approval)
+            } else if let question {
+                AgentQuestionCard(request: question)
+                    .id(question.id)
             } else {
                 ScrollView(.vertical) {
                     Text(detailText)
@@ -381,5 +386,102 @@ struct AgentPillButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 3)
             .background(color.opacity(configuration.isPressed ? 0.6 : 1), in: Capsule())
+    }
+}
+
+// MARK: - Question
+
+/// Walks through an agent's questions one at a time and sends the answers back.
+struct AgentQuestionCard: View {
+    let request: AgentQuestionRequest
+
+    @ObservedObject var agents = AgentManager.shared
+    @State private var index = 0
+    @State private var answers: [String: String] = [:]
+    @State private var picked: Set<String> = []
+
+    private var current: AgentQuestion { request.questions[min(index, request.questions.count - 1)] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                if request.questions.count > 1 {
+                    Text("\(index + 1)/\(request.questions.count)")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(.gray)
+                }
+                Text(current.text)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+            }
+
+            ScrollView(.vertical) {
+                VStack(spacing: 3) {
+                    ForEach(current.options, id: \.label) { option in
+                        optionRow(option)
+                    }
+                }
+            }
+            .scrollIndicators(.never)
+
+            HStack(spacing: 6) {
+                Button("Answer in Claude") { agents.answerInAgent(request) }
+                    .buttonStyle(AgentPillButtonStyle(color: .white.opacity(0.15)))
+                if current.multiSelect {
+                    Button(index + 1 < request.questions.count ? "Next" : "Send") {
+                        choose(current.options.map(\.label).filter(picked.contains).joined(separator: ", "))
+                    }
+                    .buttonStyle(AgentPillButtonStyle(color: .green.opacity(0.7)))
+                    .disabled(picked.isEmpty)
+                    .opacity(picked.isEmpty ? 0.5 : 1)
+                }
+            }
+        }
+    }
+
+    private func optionRow(_ option: AgentQuestion.Option) -> some View {
+        let isPicked = picked.contains(option.label)
+        return Button {
+            if current.multiSelect {
+                if isPicked { picked.remove(option.label) } else { picked.insert(option.label) }
+            } else {
+                choose(option.label)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if current.multiSelect {
+                    Image(systemName: isPicked ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 10))
+                }
+                Text(option.label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Text(option.detail)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.gray)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(isPicked ? 0.22 : 0.1), in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .help(option.detail)
+    }
+
+    /// Records the answer to the current question and moves on, sending everything after the last one.
+    private func choose(_ answer: String) {
+        answers[current.text] = answer
+        picked = []
+        if index + 1 < request.questions.count {
+            index += 1
+        } else {
+            agents.answer(request, with: answers)
+        }
     }
 }

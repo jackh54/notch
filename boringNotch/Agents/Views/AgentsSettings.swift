@@ -40,6 +40,9 @@ struct AgentsSettings: View {
                     Defaults.Toggle(key: .agentsAnswerApprovals) {
                         Text("Answer permission prompts from the notch")
                     }
+                    Defaults.Toggle(key: .agentsAnswerQuestions) {
+                        Text("Answer Claude's questions from the notch")
+                    }
                 }
                 .disabled(!enableAgents)
             } header: {

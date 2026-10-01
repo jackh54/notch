@@ -32,6 +32,7 @@ This is a personal fork of [TheBoredTeam/boring.notch](https://github.com/TheBor
 - **Session list** — live Claude Code sessions (from `~/.claude/sessions`) and recent Codex threads (from `~/.codex`), with working / waiting / idle state and the last thing each one said.
 - **Closed-notch indicator** — shows when a session is working, turns orange when one needs you, and announces when one finishes.
 - **Permission prompts** — with hooks installed, Allow / Deny a tool request from the notch or with a keyboard shortcut.
+- **Questions** — when Claude Code asks a multiple-choice question, pick the answer in the notch, or hand it back to Claude's own dialog.
 - **Prompt bar** — start a new Claude Code or Codex task in a chosen folder, or send a follow-up. Claude follow-ups run in a fork of the session; Codex follow-ups are queued onto the thread.
 - **Shortcuts** (Settings → Shortcuts) — open Agents and type (`⌃⌥A`), allow (`⌃⌥Y`) or deny (`⌃⌥N`) the oldest pending request.
 

@@ -137,6 +137,41 @@ struct AgentApprovalRequest: Identifiable, Equatable {
     let receivedAt: Date
 }
 
+/// One multiple-choice question from an agent.
+struct AgentQuestion: Equatable {
+    struct Option: Equatable {
+        let label: String
+        let detail: String
+    }
+
+    let text: String
+    let header: String
+    let options: [Option]
+    let multiSelect: Bool
+}
+
+/// A set of questions an agent is blocked on, answerable from the notch.
+struct AgentQuestionRequest: Identifiable, Equatable {
+    let id: UUID
+    let sessionKey: String
+    let questions: [AgentQuestion]
+
+    /// Parses the input of Claude Code's AskUserQuestion tool.
+    static func questions(fromToolInput input: [String: Any]?) -> [AgentQuestion] {
+        (input?["questions"] as? [[String: Any]] ?? []).compactMap { raw in
+            guard let text = raw["question"] as? String else { return nil }
+            let options = (raw["options"] as? [[String: Any]] ?? []).compactMap { option in
+                (option["label"] as? String).map {
+                    AgentQuestion.Option(label: $0, detail: option["description"] as? String ?? "")
+                }
+            }
+            return AgentQuestion(
+                text: text, header: raw["header"] as? String ?? "",
+                options: options, multiSelect: raw["multiSelect"] as? Bool ?? false)
+        }
+    }
+}
+
 struct AgentBanner: Equatable {
     let provider: AgentProvider
     let title: String
@@ -157,6 +192,7 @@ extension Defaults.Keys {
     static let agentsOpenOnApproval = Key<Bool>("agentsOpenOnApproval", default: true)
     static let agentsFinishedBanner = Key<Bool>("agentsFinishedBanner", default: true)
     static let agentsAnswerApprovals = Key<Bool>("agentsAnswerApprovals", default: true)
+    static let agentsAnswerQuestions = Key<Bool>("agentsAnswerQuestions", default: true)
     static let didEnableLaunchAtLogin = Key<Bool>("didEnableLaunchAtLoginForFork", default: false)
     static let agentsHookPort = Key<Int>("agentsHookPort", default: 47615)
     static let agentsHookToken = Key<String>("agentsHookToken", default: "")

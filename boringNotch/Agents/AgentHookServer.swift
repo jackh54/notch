@@ -16,7 +16,8 @@ final class AgentHookServer {
     typealias Reply = (_ body: Data?) -> Void
 
     /// Called on the main queue for every authenticated event.
-    var onEvent: ((_ provider: AgentProvider, _ payload: [String: Any], _ requestID: UUID, _ reply: @escaping Reply) -> Void)?
+    /// `wait` is how many seconds the hook is willing to block for an answer.
+    var onEvent: ((_ provider: AgentProvider, _ payload: [String: Any], _ wait: Int, _ requestID: UUID, _ reply: @escaping Reply) -> Void)?
     /// Called on the main queue for `GET /status`; returns the JSON body.
     var onStatus: (() -> Data?)?
     /// Called on the main queue for `POST /open`.
@@ -117,7 +118,7 @@ final class AgentHookServer {
             break
         }
 
-        // Path: /hook/<provider>?token=<token>
+        // Path: /hook/<provider>?token=<token>&wait=<seconds>
         guard request.method == "POST",
               components.path.hasPrefix("/hook/"),
               let provider = AgentProvider(rawValue: String(components.path.dropFirst("/hook/".count))),
@@ -127,6 +128,7 @@ final class AgentHookServer {
             return
         }
 
+        let wait = components.queryItems?.first(where: { $0.name == "wait" })?.value.flatMap(Int.init) ?? 0
         let requestID = UUID()
         let replied = ManagedFlag()
 
@@ -143,7 +145,7 @@ final class AgentHookServer {
                 self?.queue.async { if replied.setIfUnset() { self?.respond(connection, status: "200 OK", body: nil) } }
                 return
             }
-            onEvent(provider, payload, requestID) { body in
+            onEvent(provider, payload, wait, requestID) { body in
                 self.queue.async {
                     guard replied.setIfUnset() else { return }
                     self.respond(connection, status: "200 OK", body: body)
