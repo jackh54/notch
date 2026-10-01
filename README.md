@@ -25,6 +25,30 @@
 
 Say hello to **Boring Notch**, the coolest way to make your MacBook’s notch the star of the show! Say goodbye to boring status bars: with Boring Notch, your notch transforms into a dynamic music control center, complete with a vibrant visualizer and all the essential music controls you need. But that’s just the start! Boring Notch also offers calendar integration, a handy file shelf with AirDrop support, a complete MacOS HUD replacement and more!
 
+## This fork: a notch for Claude Code and Codex
+
+This is a personal fork of [TheBoredTeam/boring.notch](https://github.com/TheBoredTeam/boring.notch) that adds an **Agents** tab for coding-agent sessions. Everything upstream (music, shelf, calendar, HUDs) is still there.
+
+- **Session list** — live Claude Code sessions (from `~/.claude/sessions`) and recent Codex threads (from `~/.codex`), with working / waiting / idle state and the last thing each one said.
+- **Closed-notch indicator** — shows when a session is working, turns orange when one needs you, and announces when one finishes.
+- **Permission prompts** — with hooks installed, Allow / Deny a tool request from the notch or with a keyboard shortcut.
+- **Prompt bar** — start a new Claude Code or Codex task in a chosen folder, or send a follow-up. Claude follow-ups run in a fork of the session; Codex follow-ups are queued onto the thread.
+- **Shortcuts** (Settings → Shortcuts) — open Agents and type (`⌃⌥A`), allow (`⌃⌥Y`) or deny (`⌃⌥N`) the oldest pending request.
+
+Set it up in **Settings → Agents**: install the hooks for Claude Code and Codex (Codex also needs `/hooks` run once to trust them). The hooks call a small script that forwards events to the app on `127.0.0.1` and does nothing when the app isn't running.
+
+For scripts, the app serves the session list as JSON at `GET /status` and opens the Agents tab on `POST /open`, on the same loopback port and token as the hook script (`~/Library/Application Support/boringNotch/notch-agent-hook`).
+
+Differences from upstream that matter: the app sandbox is off (it has to read `~/.claude` and `~/.codex` and launch the CLIs), and Sparkle's automatic update checks are off so upstream builds don't replace the fork.
+
+Build and install locally, without a signing identity:
+
+```bash
+./scripts/install-local.sh
+```
+
+---
+
 <p align="center">
   <img src="https://github.com/user-attachments/assets/2d5f69c1-6e7b-4bc2-a6f1-bb9e27cf88a8" alt="Demo GIF" />
 </p>

@@ -62,6 +62,12 @@ struct AgentsView: View {
             agents.isComposing = false
             vm.close()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .agentNeedsAttention)) { _ in
+            // Show the session that needs the user rather than whatever was selected before.
+            selectedID = nil
+        }
+        .onAppear(perform: focusPromptIfRequested)
+        .onChange(of: agents.wantsPromptFocus) { focusPromptIfRequested() }
         .onDisappear {
             agents.isComposing = false
         }
@@ -180,6 +186,16 @@ struct AgentsView: View {
         return "New \(newTaskProvider.shortName) task…"
     }
 
+    private func focusPromptIfRequested() {
+        guard agents.wantsPromptFocus else { return }
+        agents.wantsPromptFocus = false
+        // The notch panel only takes key focus on demand, so ask for it before focusing the field.
+        NSApp.windows.first { $0 is BoringNotchSkyLightWindow && $0.isVisible }?.makeKey()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            promptFocused = true
+        }
+    }
+
     private func beginReply(to session: AgentSession) {
         replyTargetID = session.id
         promptFocused = true
@@ -219,6 +235,11 @@ struct AgentSessionRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if session.state == .idle {
+                Text(session.age())
+                    .font(.system(size: 9, design: .rounded))
+                    .foregroundStyle(.gray.opacity(0.7))
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)

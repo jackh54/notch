@@ -9,6 +9,7 @@ import AVFoundation
 import Combine
 import Defaults
 import KeyboardShortcuts
+import LaunchAtLogin
 import Sparkle
 import SwiftUI
 
@@ -281,6 +282,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AgentManager.shared.start()
+        // This fork is meant to always be running: turn on launch at login once, then leave it to Settings.
+        if !Defaults[.didEnableLaunchAtLogin] {
+            Defaults[.didEnableLaunchAtLogin] = true
+            LaunchAtLogin.isEnabled = true
+        }
 
         NotificationCenter.default.addObserver(
             self,
@@ -364,6 +370,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     duration: 3.0
                 )
             }
+        }
+
+        KeyboardShortcuts.onKeyDown(for: .openAgents) {
+            guard Defaults[.enableAgents] else { return }
+            Task { @MainActor in AgentManager.shared.openForTyping() }
+        }
+        KeyboardShortcuts.onKeyDown(for: .allowAgentRequest) {
+            Task { @MainActor in AgentManager.shared.allowOldestApproval() }
+        }
+        KeyboardShortcuts.onKeyDown(for: .denyAgentRequest) {
+            Task { @MainActor in AgentManager.shared.denyOldestApproval() }
         }
 
         KeyboardShortcuts.onKeyDown(for: .toggleNotchOpen) { [weak self] in

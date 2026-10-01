@@ -12,7 +12,7 @@ ENTITLEMENTS="$DERIVED/app.entitlements"
 
 xcodebuild -project "$ROOT/boringNotch.xcodeproj" -scheme boringNotch -configuration Release \
   -derivedDataPath "$DERIVED" CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO build \
-  | grep -E " error|BUILD" || true
+  | grep -E "error:|\*\* BUILD" || true
 [ -d "$BUILT" ] || { echo "Build failed: $BUILT not found" >&2; exit 1; }
 
 codesign -d --entitlements - --xml "$BUILT" 2>/dev/null > "$ENTITLEMENTS"

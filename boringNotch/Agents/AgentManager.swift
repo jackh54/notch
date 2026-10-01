@@ -19,6 +19,8 @@ final class AgentManager: ObservableObject {
     @Published var lastError: String?
     /// True while the prompt field has keyboard focus; keeps the notch open.
     @Published var isComposing: Bool = false
+    /// Set by the keyboard shortcut; the Agents tab focuses its prompt field and clears it.
+    @Published var wantsPromptFocus: Bool = false
 
     /// State learned from hook events, keyed by session key.
     private struct HookInfo {
@@ -57,6 +59,12 @@ final class AgentManager: ObservableObject {
             MainActor.assumeIsolated {
                 self?.handleHook(provider: provider, payload: payload, requestID: requestID, reply: reply)
             }
+        }
+        server.onStatus = { [weak self] in
+            MainActor.assumeIsolated { self?.statusJSON() }
+        }
+        server.onOpen = {
+            NotificationCenter.default.post(name: .agentOpenRequested, object: nil)
         }
         server.onDisconnect = { [weak self] requestID in
             MainActor.assumeIsolated {
@@ -121,6 +129,10 @@ final class AgentManager: ObservableObject {
         sessions.first { $0.state.needsAttention } ?? sessions.first { $0.state == .working }
     }
 
+    /// The approval the keyboard shortcuts act on: the oldest one still pending.
+    func allowOldestApproval() { approvals.first.map(allow) }
+    func denyOldestApproval() { approvals.first.map(deny) }
+
     func approval(for session: AgentSession) -> AgentApprovalRequest? {
         approvals.first { $0.sessionKey == session.id }
     }
@@ -130,6 +142,14 @@ final class AgentManager: ObservableObject {
         var seen = Set<String>()
         let last = Defaults[.agentsLastDirectory]
         return ([last] + sessions.map(\.cwd)).filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private func statusJSON() -> Data? {
+        let body: [String: Any] = [
+            "sessions": sessions.map(\.statusJSON),
+            "approvals": approvals.map { ["session": $0.sessionKey, "tool": $0.toolName, "detail": $0.detail] },
+        ]
+        return try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
     // MARK: - Merging
@@ -266,11 +286,14 @@ final class AgentManager: ObservableObject {
         case "PermissionRequest":
             info.state = .needsApproval
             info.activity = AgentText.oneLine(toolDetail.isEmpty ? toolName : "\(toolName): \(toolDetail)")
-            pendingReplies[requestID] = reply
-            holdsReply = true
-            approvals.append(AgentApprovalRequest(
-                id: requestID, sessionKey: key, provider: provider,
-                toolName: toolName, detail: toolDetail, receivedAt: .now))
+            // When answering from the notch is off we only flag the session and let the agent prompt as usual.
+            if Defaults[.agentsAnswerApprovals] {
+                pendingReplies[requestID] = reply
+                holdsReply = true
+                approvals.append(AgentApprovalRequest(
+                    id: requestID, sessionKey: key, provider: provider,
+                    toolName: toolName, detail: toolDetail, receivedAt: .now))
+            }
         case "Notification":
             let type = payload["notification_type"] as? String ?? ""
             if ["idle_prompt", "agent_needs_input", "elicitation_dialog", "permission_prompt"].contains(type) {
@@ -344,6 +367,12 @@ final class AgentManager: ObservableObject {
     }
 
     // MARK: - Actions
+
+    /// Opens the notch on the Agents tab with the prompt field ready for typing.
+    func openForTyping() {
+        wantsPromptFocus = true
+        NotificationCenter.default.post(name: .agentOpenRequested, object: nil)
+    }
 
     func focus(_ session: AgentSession) {
         AgentCLI.focus(session)

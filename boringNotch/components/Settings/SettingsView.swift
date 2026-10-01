@@ -1745,6 +1745,18 @@ struct Shortcuts: View {
             Section {
                 KeyboardShortcuts.Recorder("Toggle Notch Open:", name: .toggleNotchOpen)
             }
+            Section {
+                KeyboardShortcuts.Recorder("Open Agents and type:", name: .openAgents)
+                KeyboardShortcuts.Recorder("Allow pending request:", name: .allowAgentRequest)
+                KeyboardShortcuts.Recorder("Deny pending request:", name: .denyAgentRequest)
+            } header: {
+                Text("Agents")
+            } footer: {
+                Text("Allow and Deny act on the oldest permission request waiting in the notch.")
+                    .multilineTextAlignment(.trailing)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
         }
         .accentColor(.effectiveAccent)
         .navigationTitle("Shortcuts")

@@ -176,8 +176,15 @@ struct ContentView: View {
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .agentNeedsAttention)) { _ in
                         guard Defaults[.agentsOpenOnApproval], vm.notchState == .closed, !vm.hideOnClosed else { return }
-                        coordinator.currentView = .agents
-                        doOpen()
+                        openAgents()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: .agentOpenRequested)) { _ in
+                        guard Defaults[.enableAgents] else { return }
+                        openAgents()
+                    }
+                    .onChange(of: agents.approvals.isEmpty) { _, isEmpty in
+                        // The request that opened the notch was answered; let it close again.
+                        if isEmpty { closeAgentsIfUnattended(after: .seconds(1)) }
                     }
                     .onChange(of: vm.notchState) { _, newState in
                         if newState == .closed && isHovering {
@@ -528,6 +535,28 @@ struct ContentView: View {
         }
         } else {
             EmptyView()
+        }
+    }
+
+    /// Opens on the Agents tab without the pointer, then closes again unless the user engages with it.
+    private func openAgents() {
+        coordinator.currentView = .agents
+        if vm.notchState == .closed { doOpen() }
+        closeAgentsIfUnattended(after: .seconds(6))
+    }
+
+    private func closeAgentsIfUnattended(after delay: Duration) {
+        hoverTask?.cancel()
+        hoverTask = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                // A pending permission request keeps the notch open until it is answered.
+                guard self.vm.notchState == .open, !self.isHovering, self.agents.approvals.isEmpty,
+                      !self.vm.isBatteryPopoverActive, !SharingStateManager.shared.preventNotchClose
+                else { return }
+                self.vm.close()
+            }
         }
     }
 

@@ -5,6 +5,7 @@
 //  Loopback HTTP listener that receives Claude Code / Codex hook events.
 //  The hook script POSTs the event JSON and prints whatever we answer, so a
 //  permission request can be held open until it is decided in the notch.
+//  Also serves `GET /status` (session list as JSON) and `POST /open` for scripts.
 //
 
 import Foundation
@@ -16,6 +17,10 @@ final class AgentHookServer {
 
     /// Called on the main queue for every authenticated event.
     var onEvent: ((_ provider: AgentProvider, _ payload: [String: Any], _ requestID: UUID, _ reply: @escaping Reply) -> Void)?
+    /// Called on the main queue for `GET /status`; returns the JSON body.
+    var onStatus: (() -> Data?)?
+    /// Called on the main queue for `POST /open`.
+    var onOpen: (() -> Void)?
     /// Called on the main queue when a client hangs up before we replied.
     var onDisconnect: ((_ requestID: UUID) -> Void)?
 
@@ -88,10 +93,32 @@ final class AgentHookServer {
     }
 
     private func handle(_ request: HTTPRequest, on connection: NWConnection) {
+        guard let components = URLComponents(string: request.path),
+              components.queryItems?.first(where: { $0.name == "token" })?.value == token
+        else {
+            respond(connection, status: "400 Bad Request", body: nil)
+            return
+        }
+
+        switch (request.method, components.path) {
+        case ("GET", "/status"):
+            DispatchQueue.main.async { [weak self] in
+                let body = self?.onStatus?()
+                self?.queue.async { self?.respond(connection, status: "200 OK", body: body) }
+            }
+            return
+        case ("POST", "/open"):
+            DispatchQueue.main.async { [weak self] in
+                self?.onOpen?()
+                self?.queue.async { self?.respond(connection, status: "200 OK", body: nil) }
+            }
+            return
+        default:
+            break
+        }
+
         // Path: /hook/<provider>?token=<token>
         guard request.method == "POST",
-              let components = URLComponents(string: request.path),
-              components.queryItems?.first(where: { $0.name == "token" })?.value == token,
               components.path.hasPrefix("/hook/"),
               let provider = AgentProvider(rawValue: String(components.path.dropFirst("/hook/".count))),
               let payload = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any]

@@ -14,6 +14,7 @@ enum AgentPaths {
     static let claudeDirectory = home.appendingPathComponent(".claude")
     static let claudeSessions = claudeDirectory.appendingPathComponent("sessions")
     static let claudeSettings = claudeDirectory.appendingPathComponent("settings.json")
+    static let claudeProjects = claudeDirectory.appendingPathComponent("projects")
 
     static let codexDirectory = home.appendingPathComponent(".codex")
     static let codexState = codexDirectory.appendingPathComponent("state_5.sqlite")
@@ -56,11 +57,65 @@ enum ClaudeSessionSource {
                 title: name.isEmpty ? (cwd as NSString).lastPathComponent : name,
                 cwd: cwd,
                 state: entry.status == "busy" ? .working : .idle,
+                lastMessage: lastAssistantMessage(sessionId: entry.sessionId, cwd: cwd),
                 updatedAt: Date(timeIntervalSince1970: milliseconds / 1000),
                 pid: entry.pid,
                 host: entry.entrypoint
             )
         }
+    }
+
+    // MARK: Transcript
+
+    private static let cacheLock = NSLock()
+    private static var messageCache: [String: (modified: Date, message: String?)] = [:]
+
+    /// The last thing Claude said, read from the tail of the session transcript.
+    private static func lastAssistantMessage(sessionId: String, cwd: String) -> String? {
+        guard !cwd.isEmpty else { return nil }
+        // Transcripts live in a folder named after the cwd with non-alphanumerics replaced by "-".
+        let folder = String(cwd.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
+        let url = AgentPaths.claudeProjects.appendingPathComponent("\(folder)/\(sessionId).jsonl")
+        guard let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        else { return nil }
+
+        cacheLock.lock()
+        let cached = messageCache[sessionId]
+        cacheLock.unlock()
+        if let cached, cached.modified == modified { return cached.message }
+
+        let message = readLastAssistantMessage(url)
+        cacheLock.lock()
+        messageCache[sessionId] = (modified, message)
+        cacheLock.unlock()
+        return message
+    }
+
+    private static func readLastAssistantMessage(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+
+        let size = (try? handle.seekToEnd()) ?? 0
+        let window: UInt64 = 512 * 1024
+        try? handle.seek(toOffset: size > window ? size - window : 0)
+        guard let data = try? handle.readToEnd() else { return nil }
+
+        for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
+            guard line.range(of: Data("\"type\":\"assistant\"".utf8)) != nil,
+                  let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
+                  object["type"] as? String == "assistant",
+                  object["isSidechain"] as? Bool != true,
+                  let message = object["message"] as? [String: Any],
+                  let content = message["content"] as? [[String: Any]]
+            else { continue }
+
+            let text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+                .joined(separator: " ")
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return AgentText.oneLine(text, limit: 600)
+            }
+        }
+        return nil
     }
 
     private static func isAlive(_ pid: Int32) -> Bool {

@@ -37,6 +37,9 @@ struct AgentsSettings: View {
                     Defaults.Toggle(key: .agentsOpenOnApproval) {
                         Text("Open the notch when a session needs you")
                     }
+                    Defaults.Toggle(key: .agentsAnswerApprovals) {
+                        Text("Answer permission prompts from the notch")
+                    }
                 }
                 .disabled(!enableAgents)
             } header: {
