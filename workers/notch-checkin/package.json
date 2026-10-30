@@ -1,0 +1,24 @@
+{
+  "name": "notch-checkin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "guard": "node scripts/guard.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply notch-checkin --local",
+    "db:migrate": "wrangler d1 migrations apply notch-checkin --remote",
+    "deploy": "npm run guard && npm run typecheck && npm test && npm run db:migrate && wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.13.14"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.11",
+    "@cloudflare/workers-types": "^5.20261030.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.156.0"
+  }
+}
