@@ -185,7 +185,7 @@ enum CodexSessionSource {
             let title = text(1)
             let rollout = text(5)
             let gitBranch = text(7)
-            let tail = rolloutTail(path: rollout)
+            let tail = cachedRolloutTail(path: rollout)
 
             sessions.append(AgentSession(
                 provider: .codex,
@@ -215,8 +215,30 @@ enum CodexSessionSource {
         return nil
     }
 
+    private typealias RolloutTail = (isRunning: Bool, lastMessage: String?, model: String?)
+
+    private static let cacheLock = NSLock()
+    private static var tailCache: [String: (modified: Date, tail: RolloutTail)] = [:]
+
+    /// Rollouts are parsed every poll for every recent thread, so only reread those that changed.
+    private static func cachedRolloutTail(path: String) -> RolloutTail {
+        let modified = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        guard let modified else { return (false, nil, nil) }
+
+        cacheLock.lock()
+        let cached = tailCache[path]
+        cacheLock.unlock()
+        if let cached, cached.modified == modified { return cached.tail }
+
+        let tail = rolloutTail(path: path)
+        cacheLock.lock()
+        tailCache[path] = (modified, tail)
+        cacheLock.unlock()
+        return tail
+    }
+
     /// A turn is running when the newest turn marker in the rollout is `task_started`.
-    private static func rolloutTail(path: String) -> (isRunning: Bool, lastMessage: String?, model: String?) {
+    private static func rolloutTail(path: String) -> RolloutTail {
         guard !path.isEmpty, let handle = FileHandle(forReadingAtPath: path) else { return (false, nil, nil) }
         defer { try? handle.close() }
 

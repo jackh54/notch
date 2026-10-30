@@ -6,10 +6,11 @@
 # Usage: scripts/agent-demo.sh
 set -euo pipefail
 
-DOMAIN="theboringteam.boringnotch"
-PORT="$(defaults read "$DOMAIN" agentsHookPort 2>/dev/null || echo 47615)"
-TOKEN="$(defaults read "$DOMAIN" agentsHookToken 2>/dev/null || true)"
-[ -n "$TOKEN" ] || { echo "No hook token found. Launch the app first." >&2; exit 1; }
+# The app keeps the hook script up to date with its port and token.
+HOOK="$HOME/Library/Application Support/boringNotch/notch-agent-hook"
+[ -f "$HOOK" ] || { echo "No hook script found. Install hooks in Settings > Agents first." >&2; exit 1; }
+PORT="$(sed -nE 's#.*127\.0\.0\.1:([0-9]+)/.*#\1#p' "$HOOK")"
+TOKEN="$(sed -nE 's#.*token=([^&]+)&.*#\1#p' "$HOOK")"
 
 BASE="http://127.0.0.1:$PORT/hook/claude?token=$TOKEN"
 SESSION="demo-$(date +%s)"
