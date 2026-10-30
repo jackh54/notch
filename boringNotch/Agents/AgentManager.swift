@@ -14,8 +14,14 @@ final class AgentManager: ObservableObject {
     static let shared = AgentManager()
 
     @Published private(set) var sessions: [AgentSession] = []
-    @Published private(set) var approvals: [AgentApprovalRequest] = []
-    @Published private(set) var questions: [AgentQuestionRequest] = []
+    @Published private(set) var approvals: [AgentApprovalRequest] = [] {
+        didSet { refreshCurrentRequest() }
+    }
+    @Published private(set) var questions: [AgentQuestionRequest] = [] {
+        didSet { refreshCurrentRequest() }
+    }
+    /// The request on screen. The card and the keyboard shortcuts both act on this one.
+    @Published private(set) var currentRequest: AgentRequest?
     @Published private(set) var banner: AgentBanner?
     @Published var lastError: String?
     /// True while the prompt field has keyboard focus; keeps the notch open.
@@ -40,6 +46,11 @@ final class AgentManager: ObservableObject {
     /// The original tool input of each pending question, echoed back with the answers.
     private var questionInputs: [UUID: [String: Any]] = [:]
     private var runProcesses: [String: Process] = [:]
+    /// The request the user stepped to, if they moved away from the oldest one.
+    private var focusedRequestID: UUID?
+    private var requestShownAt: Date = .distantPast
+    /// How many Agents tabs are on screen; there can be one per display.
+    private var requestViewers = 0
 
     private let server = AgentHookServer()
     private var pollTask: Task<Void, Never>?
@@ -48,6 +59,8 @@ final class AgentManager: ObservableObject {
 
     private static let hookOnlyLifetime: TimeInterval = 15 * 60
     private static let stalledWorkLifetime: TimeInterval = 10 * 60
+    /// Input is ignored for this long after a card appears, so a click aimed at the previous card can't land on it.
+    private static let requestArmDelay: TimeInterval = 0.4
 
     private init() {}
 
@@ -133,20 +146,60 @@ final class AgentManager: ObservableObject {
         sessions.first { $0.state.needsAttention } ?? sessions.first { $0.state == .working }
     }
 
-    /// The approval the keyboard shortcuts act on: the oldest one still pending.
-    func allowOldestApproval() { approvals.first.map(allow) }
-    func denyOldestApproval() { approvals.first.map(deny) }
-
-    func approval(for session: AgentSession) -> AgentApprovalRequest? {
-        approvals.first { $0.sessionKey == session.id }
-    }
-
-    func question(for session: AgentSession) -> AgentQuestionRequest? {
-        questions.first { $0.sessionKey == session.id }
-    }
-
     /// True while an agent is blocked on an answer from the notch.
     var hasPendingRequests: Bool { !approvals.isEmpty || !questions.isEmpty }
+
+    /// Everything agents are blocked on, oldest first. New requests queue behind the one on screen.
+    var pendingRequests: [AgentRequest] {
+        (approvals.map(AgentRequest.approval) + questions.map(AgentRequest.question))
+            .sorted { $0.receivedAt < $1.receivedAt }
+    }
+
+    /// False just after a card appears; see `requestArmDelay`.
+    var requestIsArmed: Bool {
+        Date().timeIntervalSince(requestShownAt) >= Self.requestArmDelay
+    }
+
+    private func refreshCurrentRequest() {
+        let pending = pendingRequests
+        let next = pending.first { $0.id == focusedRequestID } ?? pending.first
+        if next?.id != currentRequest?.id { requestShownAt = .now }
+        currentRequest = next
+    }
+
+    /// Steps through the queue, wrapping at either end.
+    func showRequest(offset: Int) {
+        let pending = pendingRequests
+        guard let currentID = currentRequest?.id,
+              let index = pending.firstIndex(where: { $0.id == currentID })
+        else { return }
+        focusedRequestID = pending[(index + offset + pending.count) % pending.count].id
+        refreshCurrentRequest()
+    }
+
+    /// Brings up the request `session` is blocked on, if it has one.
+    func showRequest(for session: AgentSession) {
+        guard let request = pendingRequests.first(where: { $0.sessionKey == session.id }) else { return }
+        focusedRequestID = request.id
+        refreshCurrentRequest()
+    }
+
+    func requestViewAppeared() { requestViewers += 1 }
+    func requestViewDisappeared() { requestViewers = max(0, requestViewers - 1) }
+
+    /// The shortcuts answer the card on screen. With no card showing they open it instead,
+    /// so nothing is ever approved unseen.
+    func allowCurrentRequest() { decideCurrentRequest(using: allow) }
+    func denyCurrentRequest() { decideCurrentRequest(using: deny) }
+
+    private func decideCurrentRequest(using decide: (AgentApprovalRequest) -> Void) {
+        guard case .approval(let approval) = currentRequest else { return }
+        guard requestViewers > 0 else {
+            NotificationCenter.default.post(name: .agentOpenRequested, object: nil)
+            return
+        }
+        decide(approval)
+    }
 
     /// Working directories worth offering for a new task, most recent first.
     var knownDirectories: [String] {
@@ -201,7 +254,16 @@ final class AgentManager: ObservableObject {
             merged[question.sessionKey]?.state = .waiting
         }
 
+        // Sessions with a request keep their queue position so rows don't move under the pointer.
+        var requestOrder: [String: Int] = [:]
+        for (index, request) in pendingRequests.enumerated() where requestOrder[request.sessionKey] == nil {
+            requestOrder[request.sessionKey] = index
+        }
+
         let sorted = merged.values.sorted {
+            let leftOrder = requestOrder[$0.id] ?? .max
+            let rightOrder = requestOrder[$1.id] ?? .max
+            if leftOrder != rightOrder { return leftOrder < rightOrder }
             if $0.state.needsAttention != $1.state.needsAttention { return $0.state.needsAttention }
             if ($0.state == .working) != ($1.state == .working) { return $0.state == .working }
             return $0.updatedAt > $1.updatedAt
@@ -302,7 +364,7 @@ final class AgentManager: ObservableObject {
                 pendingReplies[requestID] = reply
                 questionInputs[requestID] = toolInput
                 holdsReply = true
-                questions.append(AgentQuestionRequest(id: requestID, sessionKey: key, questions: parsed))
+                questions.append(AgentQuestionRequest(id: requestID, sessionKey: key, questions: parsed, receivedAt: .now))
             }
         case "PreToolUse":
             info.state = .working
@@ -354,8 +416,15 @@ final class AgentManager: ObservableObject {
 
     // MARK: - Approvals
 
-    func allow(_ approval: AgentApprovalRequest) { resolve(approval, allow: true) }
-    func deny(_ approval: AgentApprovalRequest) { resolve(approval, allow: false) }
+    func allow(_ approval: AgentApprovalRequest) {
+        guard requestIsArmed else { return }
+        resolve(approval, allow: true)
+    }
+
+    func deny(_ approval: AgentApprovalRequest) {
+        guard requestIsArmed else { return }
+        resolve(approval, allow: false)
+    }
 
     /// `allow == nil` hands the decision back to the agent's own prompt.
     private func resolve(_ approval: AgentApprovalRequest, allow: Bool?) {

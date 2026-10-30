@@ -377,10 +377,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in AgentManager.shared.openForTyping() }
         }
         KeyboardShortcuts.onKeyDown(for: .allowAgentRequest) {
-            Task { @MainActor in AgentManager.shared.allowOldestApproval() }
+            Task { @MainActor in AgentManager.shared.allowCurrentRequest() }
         }
         KeyboardShortcuts.onKeyDown(for: .denyAgentRequest) {
-            Task { @MainActor in AgentManager.shared.denyOldestApproval() }
+            Task { @MainActor in AgentManager.shared.denyCurrentRequest() }
         }
 
         KeyboardShortcuts.onKeyDown(for: .toggleNotchOpen) { [weak self] in

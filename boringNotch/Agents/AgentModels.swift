@@ -155,6 +155,7 @@ struct AgentQuestionRequest: Identifiable, Equatable {
     let id: UUID
     let sessionKey: String
     let questions: [AgentQuestion]
+    let receivedAt: Date
 
     /// Parses the input of Claude Code's AskUserQuestion tool.
     static func questions(fromToolInput input: [String: Any]?) -> [AgentQuestion] {
@@ -168,6 +169,33 @@ struct AgentQuestionRequest: Identifiable, Equatable {
             return AgentQuestion(
                 text: text, header: raw["header"] as? String ?? "",
                 options: options, multiSelect: raw["multiSelect"] as? Bool ?? false)
+        }
+    }
+}
+
+/// Anything an agent is blocked on until the user answers it in the notch.
+enum AgentRequest: Identifiable, Equatable {
+    case approval(AgentApprovalRequest)
+    case question(AgentQuestionRequest)
+
+    var id: UUID {
+        switch self {
+        case .approval(let approval): return approval.id
+        case .question(let question): return question.id
+        }
+    }
+
+    var sessionKey: String {
+        switch self {
+        case .approval(let approval): return approval.sessionKey
+        case .question(let question): return question.sessionKey
+        }
+    }
+
+    var receivedAt: Date {
+        switch self {
+        case .approval(let approval): return approval.receivedAt
+        case .question(let question): return question.receivedAt
         }
     }
 }
