@@ -317,14 +317,28 @@ struct AgentQuestionCard: View {
                     ForEach(current.options, id: \.label) { option in
                         optionRow(option)
                     }
-                    otherRow
                 }
             }
             .scrollIndicators(.never)
 
+            if isTypingOther {
+                TextField("Your answer…", text: $otherText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .focused($otherFocused)
+                    .onSubmit(chooseCurrent)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+            }
+
             HStack(spacing: 6) {
                 Button("Answer in Claude") { agents.answerInAgent(request) }
                     .buttonStyle(AgentPillButtonStyle(color: .white.opacity(0.15)))
+                if !isTypingOther {
+                    Button("Other…", action: beginTypingOther)
+                        .buttonStyle(AgentPillButtonStyle(color: .white.opacity(0.15)))
+                }
                 if current.multiSelect || isTypingOther {
                     Button(index + 1 < request.questions.count ? "Next" : "Send", action: chooseCurrent)
                         .buttonStyle(AgentPillButtonStyle(color: .green.opacity(0.7)))
@@ -360,38 +374,12 @@ struct AgentQuestionCard: View {
         choose(currentAnswer)
     }
 
-    @ViewBuilder
-    private var otherRow: some View {
-        if isTypingOther {
-            TextField("Your answer…", text: $otherText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .focused($otherFocused)
-                .onSubmit(chooseCurrent)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
-        } else {
-            Button {
-                guard agents.requestIsArmed else { return }
-                isTypingOther = true
-                agents.makeNotchKey()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    otherFocused = true
-                }
-            } label: {
-                HStack {
-                    Text("Other…")
-                        .font(.system(size: 12, weight: .semibold))
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.8))
+    private func beginTypingOther() {
+        guard agents.requestIsArmed else { return }
+        isTypingOther = true
+        agents.makeNotchKey()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            otherFocused = true
         }
     }
 

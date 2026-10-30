@@ -65,6 +65,9 @@ final class AgentManager: ObservableObject {
     private let server = AgentHookServer()
     private var pollTask: Task<Void, Never>?
     private var bannerTask: Task<Void, Never>?
+    private var queuedBanners: [AgentBanner] = []
+    /// Notch-started runs that exited with an error, announced as failures.
+    private var failedRuns: Set<String> = []
     private var cancellables: Set<AnyCancellable> = []
 
     private static let hookOnlyLifetime: TimeInterval = 15 * 60
@@ -73,6 +76,7 @@ final class AgentManager: ObservableObject {
     private static let requestArmDelay: TimeInterval = 0.4
     private static let recentToolLimit = 5
     private static let usageRateWindow: TimeInterval = 60
+    private static let bannerDuration: Duration = .seconds(6)
 
     private init() {}
 
@@ -153,6 +157,26 @@ final class AgentManager: ObservableObject {
 
     var attentionCount: Int { sessions.filter { $0.state.needsAttention }.count }
     var workingCount: Int { sessions.filter { $0.state == .working }.count }
+
+    var workingProviders: Set<AgentProvider> {
+        Set(sessions.filter { $0.state == .working }.map(\.provider))
+    }
+
+    /// The token figure for the closed notch, covering every working session.
+    func closedReadout(_ readout: AgentTokenReadout) -> String? {
+        let working = sessions.filter { $0.state == .working }
+        switch readout {
+        case .off:
+            return nil
+        case .perMinute:
+            let rate = working.reduce(0) { $0 + $1.tokensPerMinute }
+            return rate > 0 ? "\(AgentText.tokens(rate))/m" : nil
+        case .sessionTotal:
+            let includeCached = Defaults[.agentsCountCachedTokens]
+            let total = working.reduce(0) { $0 + $1.usage.total(includingCached: includeCached) }
+            return total > 0 ? AgentText.tokens(total) : nil
+        }
+    }
 
     /// Whether the closed notch should show the agent indicator.
     var hasLiveActivity: Bool {
@@ -364,24 +388,45 @@ final class AgentManager: ObservableObject {
             }
             if session.state.needsAttention, !before.needsAttention {
                 needsAttention = true
-            } else if before == .working, session.state == .idle, Defaults[.agentsFinishedBanner] {
-                show(AgentBanner(provider: session.provider, title: session.title,
-                                 text: session.lastMessage.map { AgentText.oneLine($0, limit: 80) } ?? "Finished"))
+            } else if before == .working, session.state == .idle {
+                let failed = failedRuns.remove(session.id) != nil
+                if Defaults[.agentsFinishedBanner] {
+                    show(AgentBanner(
+                        sessionKey: session.id, provider: session.provider, title: session.title,
+                        text: session.lastMessage.map { AgentText.oneLine($0, limit: 80) } ?? "Finished",
+                        outcome: failed ? .failed : .finished))
+                }
+                playSound(failed ? Self.failedSound : Self.finishedSound)
             }
         }
 
         if needsAttention {
             NotificationCenter.default.post(name: .agentNeedsAttention, object: nil)
+            playSound(Self.attentionSound)
         }
     }
 
+    private static let attentionSound = "Ping"
+    private static let finishedSound = "Glass"
+    private static let failedSound = "Basso"
+
+    private func playSound(_ name: String) {
+        guard Defaults[.agentsSounds] else { return }
+        NSSound(named: name)?.play()
+    }
+
+    /// Banners take turns, so sessions finishing together are all announced.
     private func show(_ banner: AgentBanner) {
-        bannerTask?.cancel()
+        guard self.banner == nil else {
+            queuedBanners.append(banner)
+            return
+        }
         withAnimation(.smooth) { self.banner = banner }
         bannerTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled else { return }
-            withAnimation(.smooth) { self?.banner = nil }
+            try? await Task.sleep(for: Self.bannerDuration)
+            guard !Task.isCancelled, let self else { return }
+            withAnimation(.smooth) { self.banner = nil }
+            if !self.queuedBanners.isEmpty { self.show(self.queuedBanners.removeFirst()) }
         }
     }
 
@@ -678,7 +723,10 @@ final class AgentManager: ObservableObject {
             if result.status != 0 {
                 let detail = result.errorOutput.isEmpty ? result.output : result.errorOutput
                 lastError = AgentText.oneLine("\(provider.shortName) exited with \(result.status). \(detail)", limit: 240)
-                if let runKey { localRuns[runKey]?.lastMessage = lastError }
+                if let runKey {
+                    localRuns[runKey]?.lastMessage = lastError
+                    failedRuns.insert(runKey)
+                }
             }
             publish()
         }
@@ -695,4 +743,18 @@ final class AgentManager: ObservableObject {
     func isLocalRun(_ session: AgentSession) -> Bool {
         localRuns[session.id] != nil
     }
+
+    #if DEBUG
+    /// Replaces the published state for rendering snapshots.
+    func loadFixture(
+        sessions: [AgentSession], approvals: [AgentApprovalRequest] = [],
+        questions: [AgentQuestionRequest] = [], error: String? = nil
+    ) {
+        self.sessions = sessions
+        self.approvals = approvals
+        self.questions = questions
+        lastError = error
+        requestShownAt = .distantPast
+    }
+    #endif
 }

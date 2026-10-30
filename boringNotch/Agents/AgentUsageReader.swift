@@ -6,6 +6,7 @@
 //  Files are read incrementally, so a long session is only parsed once.
 //
 
+import Defaults
 import Foundation
 import SwiftUI
 
@@ -108,38 +109,112 @@ enum AgentUsageReader {
     }
 }
 
-/// New tokens waiting to be shown, kept apart from `AgentManager` so the particle stream can
-/// run without redrawing everything that observes the sessions.
+/// Turns new tokens into particles. It sits apart from `AgentManager` so the stream can run
+/// without redrawing everything that observes the sessions, and every display shares one flow.
 @MainActor
 final class AgentTokenFlow: ObservableObject {
-    static let shared = AgentTokenFlow()
+    struct Particle {
+        let provider: AgentProvider
+        let birth: Date
+        let lifetime: TimeInterval
+        /// Height in the stream, from 0 at the top to 1 at the bottom.
+        let lane: Double
+        let radius: CGFloat
+    }
 
     /// Usage arrives in bursts, one completed message at a time; this spreads a burst out.
-    private static let drainSeconds: Double = 4
-    private static let finishedBelow: Double = 1
+    private static let spreadSeconds: Double = 4
+    private static let minimumRate: Double = 3
+    private static let particleLimit = 40
+    /// With no stream on screen nothing drains, so this stops a backlog from building up.
+    private static let backlogLimit: Double = 60
+    private static let lifetimes: ClosedRange<TimeInterval> = 1.2...1.9
+    private static let radii: ClosedRange<CGFloat> = 0.7...1.5
+
+    static let shared = AgentTokenFlow()
 
     @Published private(set) var isFlowing = false
+
+    private var particles: [Particle] = []
     private var pending: [AgentProvider: Double] = [:]
+    private var lastTick: Date?
 
     private init() {}
 
+    /// Queues particles for `tokens`. The scale is logarithmic so that 500 tokens and
+    /// 50,000 both look sensible, and no tokens means no particles.
     func add(_ tokens: Int, from provider: AgentProvider) {
-        guard tokens > 0 else { return }
-        pending[provider, default: 0] += Double(tokens)
+        guard tokens > 0, Defaults[.agentsParticles] else { return }
+        let added = log2(1 + Double(tokens) / 100) * Defaults[.agentsParticleIntensity].particlesPerDoubling
+        pending[provider] = min(Self.backlogLimit, (pending[provider] ?? 0) + added)
         isFlowing = true
     }
 
-    /// Takes the tokens due over `elapsed` seconds.
-    func drain(elapsed: TimeInterval) -> [AgentProvider: Double] {
-        let share = min(1, elapsed / Self.drainSeconds)
-        var due: [AgentProvider: Double] = [:]
-        for (provider, tokens) in pending {
-            let taken = tokens < Self.finishedBelow ? tokens : tokens * share
-            due[provider] = taken
-            pending[provider] = tokens - taken
+    /// Advances to `now` and returns the live particles. Every stream shares this, so a second
+    /// display sees the same particles rather than taking some from the first.
+    func tick(now: Date) -> [Particle] {
+        let elapsed = lastTick.map { now.timeIntervalSince($0) } ?? 0
+        lastTick = now
+
+        if elapsed > 0 {
+            for (provider, count) in pending {
+                let due = min(count, max(count * elapsed / Self.spreadSeconds, Self.minimumRate * elapsed))
+                let spawned = Int(due.rounded(.down)) + (Double.random(in: 0..<1) < due.truncatingRemainder(dividingBy: 1) ? 1 : 0)
+                for _ in 0..<spawned { spawn(provider, at: now) }
+                pending[provider] = count - due
+            }
+            pending = pending.filter { $0.value > 0.01 }
         }
-        pending = pending.filter { $0.value > 0 }
-        if pending.isEmpty { isFlowing = false }
-        return due
+
+        particles.removeAll { now.timeIntervalSince($0.birth) > $0.lifetime }
+        if pending.isEmpty, particles.isEmpty {
+            // Called while the view is rendering, so the change has to wait for the next turn.
+            lastTick = nil
+            DispatchQueue.main.async { self.isFlowing = !self.pending.isEmpty }
+        }
+        return particles
+    }
+
+    #if DEBUG
+    /// Spreads particles along the stream as if it had been running for a while.
+    func loadFixture() {
+        let now = Date()
+        particles = (0..<30).map { index in
+            Particle(
+                provider: index % 4 == 3 ? .codex : .claude, birth: now.addingTimeInterval(0.7 - Double(index) * 0.1),
+                lifetime: 3, lane: .random(in: 0...1), radius: .random(in: Self.radii))
+        }
+        isFlowing = true
+    }
+    #endif
+
+    private func spawn(_ provider: AgentProvider, at date: Date) {
+        particles.append(Particle(
+            provider: provider, birth: date, lifetime: .random(in: Self.lifetimes),
+            lane: .random(in: 0...1), radius: .random(in: Self.radii)))
+        particles.removeFirst(max(0, particles.count - Self.particleLimit))
+    }
+}
+
+/// Whether decorative animation may run right now.
+@MainActor
+final class AgentMotion: ObservableObject {
+    static let shared = AgentMotion()
+
+    @Published private var isLowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    private var observer: NSObjectProtocol?
+
+    private init() {
+        observer = NotificationCenter.default.addObserver(
+            forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.isLowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+            }
+        }
+    }
+
+    func allowsAnimation(reduceMotion: Bool, pauseOnLowPower: Bool) -> Bool {
+        !reduceMotion && !(pauseOnLowPower && isLowPower)
     }
 }

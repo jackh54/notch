@@ -14,6 +14,8 @@ struct AgentDetailView: View {
 
     @ObservedObject var agents = AgentManager.shared
     @Default(.agentsCountCachedTokens) private var countCachedTokens
+    @Default(.agentsParticles) private var particles
+    @Default(.agentsParticlesOpen) private var particlesOpen
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -30,6 +32,11 @@ struct AgentDetailView: View {
                     actionButtons
                 }
                 metaLine
+            }
+
+            if particles, particlesOpen, session.state != .idle {
+                AgentParticleStream()
+                    .frame(height: 5)
             }
 
             content

@@ -20,6 +20,7 @@ struct AgentsView: View {
 
     @Default(.agentsNewTaskProvider) private var newTaskProvider
     @Default(.agentsLastDirectory) private var lastDirectory
+    @Default(.agentsClaudeIcon) private var claudeIcon
 
     private var selected: AgentSession? {
         agents.sessions.first { $0.id == selectedID } ?? agents.primarySession ?? agents.sessions.first
@@ -77,6 +78,8 @@ struct AgentsView: View {
         .onAppear {
             agents.requestViewAppeared()
             focusPromptIfRequested()
+            // Opening while a banner shows means the user wants to see that session.
+            if let banner = agents.banner { selectedID = banner.sessionKey }
         }
         .onChange(of: agents.wantsPromptFocus) { focusPromptIfRequested() }
         .onDisappear {
@@ -105,9 +108,7 @@ struct AgentsView: View {
 
     private var emptyState: some View {
         VStack(spacing: 6) {
-            Image(systemName: "sparkle")
-                .imageScale(.large)
-                .foregroundStyle(.gray)
+            AgentProviderIcon(provider: .claude, size: 16)
             Text("No active Claude Code or Codex sessions")
                 .font(.system(.callout, design: .rounded))
                 .foregroundStyle(.gray)
@@ -203,8 +204,16 @@ struct AgentsView: View {
                     Button(provider.displayName) { newTaskProvider = provider }
                 }
             } label: {
-                Label(newTaskProvider.shortName, systemImage: newTaskProvider.icon)
-                    .foregroundStyle(newTaskProvider.tint)
+                Label {
+                    Text(newTaskProvider.shortName)
+                } icon: {
+                    if newTaskProvider == .claude, claudeIcon == .pet {
+                        Image(nsImage: AgentPetIcon.image(width: 18, color: newTaskProvider.tint))
+                    } else {
+                        Image(systemName: newTaskProvider.icon)
+                    }
+                }
+                .foregroundStyle(newTaskProvider.tint)
             }
 
             Menu {
@@ -265,9 +274,7 @@ struct AgentSessionRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Image(systemName: session.provider.icon)
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(session.provider.tint)
+                    AgentProviderIcon(provider: session.provider, mood: AgentPetMood(state: session.state), size: 9)
                     Text(session.title)
                         .font(.system(.caption, design: .rounded).weight(.medium))
                         .foregroundStyle(.white)

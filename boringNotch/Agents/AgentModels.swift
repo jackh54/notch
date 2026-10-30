@@ -325,9 +325,87 @@ enum AgentRequest: Identifiable, Equatable {
 }
 
 struct AgentBanner: Equatable {
+    enum Outcome {
+        case finished
+        case failed
+    }
+
+    let sessionKey: String
     let provider: AgentProvider
     let title: String
     let text: String
+    var outcome: Outcome = .finished
+}
+
+enum AgentParticleIntensity: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case subtle
+    case normal
+    case lively
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .subtle: return "Subtle"
+        case .normal: return "Normal"
+        case .lively: return "Lively"
+        }
+    }
+
+    /// Particles added each time a burst of tokens doubles in size.
+    var particlesPerDoubling: Double {
+        switch self {
+        case .subtle: return 1.5
+        case .normal: return 3
+        case .lively: return 6
+        }
+    }
+}
+
+enum AgentParticleColor: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case provider
+    case state
+    case custom
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .provider: return "Provider"
+        case .state: return "Session state"
+        case .custom: return "Custom"
+        }
+    }
+}
+
+enum AgentTokenReadout: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case off
+    case perMinute
+    case sessionTotal
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .perMinute: return "Per minute"
+        case .sessionTotal: return "Session total"
+        }
+    }
+}
+
+enum AgentClaudeIcon: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case pet
+    case sparkle
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .pet: return "Pet"
+        case .sparkle: return "Sparkle"
+        }
+    }
 }
 
 extension Notification.Name {
@@ -351,6 +429,18 @@ extension Defaults.Keys {
     static let agentsNewTaskProvider = Key<AgentProvider>("agentsNewTaskProvider", default: .claude)
     static let agentsLastDirectory = Key<String>("agentsLastDirectory", default: "")
     static let agentsCountCachedTokens = Key<Bool>("agentsCountCachedTokens", default: false)
+    static let agentsParticles = Key<Bool>("agentsParticles", default: true)
+    static let agentsParticlesClosed = Key<Bool>("agentsParticlesClosed", default: true)
+    static let agentsParticlesOpen = Key<Bool>("agentsParticlesOpen", default: true)
+    static let agentsParticleIntensity = Key<AgentParticleIntensity>("agentsParticleIntensity", default: .normal)
+    static let agentsParticleColor = Key<AgentParticleColor>("agentsParticleColor", default: .provider)
+    static let agentsParticleCustomColor = Key<Color>("agentsParticleCustomColor", default: .cyan)
+    static let agentsTokenReadout = Key<AgentTokenReadout>("agentsTokenReadout", default: .sessionTotal)
+    static let agentsClaudeIcon = Key<AgentClaudeIcon>("agentsClaudeIcon", default: .pet)
+    static let agentsAnimatePet = Key<Bool>("agentsAnimatePet", default: true)
+    static let agentsAttentionGlow = Key<Bool>("agentsAttentionGlow", default: true)
+    static let agentsSounds = Key<Bool>("agentsSounds", default: false)
+    static let agentsPauseOnLowPower = Key<Bool>("agentsPauseOnLowPower", default: true)
 }
 
 enum AgentText {
