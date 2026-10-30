@@ -42,7 +42,21 @@ For scripts, the app serves the session list as JSON at `GET /status` and opens 
 
 Differences from upstream that matter: the app sandbox is off (it has to read `~/.claude` and `~/.codex` and launch the CLIs), and Sparkle's automatic update checks are off so upstream builds don't replace the fork.
 
-Build and install locally, without a signing identity:
+### Install this fork
+
+[![Build for macOS](https://github.com/jackh54/notch/actions/workflows/cicd.yml/badge.svg)](https://github.com/jackh54/notch/actions/workflows/cicd.yml)
+
+[**Download the latest DMG**](https://github.com/jackh54/notch/releases/latest/download/boringNotch.dmg) (macOS 14 or later, Apple Silicon or Intel), open it and move **Boring Notch** to Applications. The build isn't notarized, so clear the quarantine flag once before opening it:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Boring Notch.app"
+```
+
+Get new versions from [Releases](https://github.com/jackh54/notch/releases). **Check for Updates** in the app still points at upstream and would replace this fork. The Installation section further down also describes upstream's build.
+
+Pushing a tag such as `v2.7.3-agents.1` builds and publishes a release.
+
+Or build and install locally, without a signing identity:
 
 ```bash
 ./scripts/install-local.sh
