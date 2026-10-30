@@ -282,9 +282,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
-        if AgentSnapshots.runIfRequested() { return }
+        if AgentSnapshots.runIfRequested() || InstallCheckIn.runTestIfRequested() { return }
         #endif
         AgentManager.shared.start()
+        InstallCheckIn.shared.start()
         // This fork is meant to always be running: turn on launch at login once, then leave it to Settings.
         if !Defaults[.didEnableLaunchAtLogin] {
             Defaults[.didEnableLaunchAtLogin] = true

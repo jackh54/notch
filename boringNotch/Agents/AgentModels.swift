@@ -456,6 +456,12 @@ extension Defaults.Keys {
     static let agentsAttentionGlow = Key<Bool>("agentsAttentionGlow", default: true)
     static let agentsSounds = Key<Bool>("agentsSounds", default: false)
     static let agentsPauseOnLowPower = Key<Bool>("agentsPauseOnLowPower", default: true)
+
+    // MARK: Version sharing
+    static let shareInstallVersion = Key<Bool>("shareInstallVersion", default: true)
+    static let installCheckInID = Key<String>("installCheckInID", default: "")
+    static let installCheckInDate = Key<Date?>("installCheckInDate", default: nil)
+    static let installCheckInBuild = Key<String>("installCheckInBuild", default: "")
 }
 
 enum AgentText {

@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "notch-checkin",
+  "account_id": "358769c88b1af55cd1f03015b7fed886",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  // Invocation logs include client IPs, which this Worker promises not to keep.
+  "observability": { "logs": { "enabled": true, "invocation_logs": false } },
+  "routes": [{ "pattern": "notch.pandascript.dev", "custom_domain": true }],
+  // Removes installs that stopped checking in.
+  "triggers": { "crons": ["0 4 * * *"] },
+  // namespace_id is account-wide: Pylon uses 1001 to 1003.
+  "ratelimits": [
+    { "name": "CHECKIN_LIMITER", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "notch-checkin",
+      "database_id": "cef73a5a-7304-40ac-9038-6355ca172f76",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
