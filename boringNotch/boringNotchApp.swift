@@ -281,6 +281,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if AgentSnapshots.runIfRequested() { return }
+        #endif
         AgentManager.shared.start()
         // This fork is meant to always be running: turn on launch at login once, then leave it to Settings.
         if !Defaults[.didEnableLaunchAtLogin] {
