@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "notch-checkin",
+  "account_id": "358769c88b1af55cd1f03015b7fed886",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "workers_dev": false,
@@ -18,8 +19,7 @@
     {
       "binding": "DB",
       "database_name": "notch-checkin",
-      // Replace with the ID from `wrangler d1 create notch-checkin`. The deploy guard checks this.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "cef73a5a-7304-40ac-9038-6355ca172f76",
       "migrations_dir": "migrations"
     }
   ]

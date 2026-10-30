@@ -458,7 +458,7 @@ extension Defaults.Keys {
     static let agentsPauseOnLowPower = Key<Bool>("agentsPauseOnLowPower", default: true)
 
     // MARK: Version sharing
-    static let shareInstallVersion = Key<Bool>("shareInstallVersion", default: false)
+    static let shareInstallVersion = Key<Bool>("shareInstallVersion", default: true)
     static let installCheckInID = Key<String>("installCheckInID", default: "")
     static let installCheckInDate = Key<Date?>("installCheckInDate", default: nil)
     static let installCheckInBuild = Key<String>("installCheckInBuild", default: "")
