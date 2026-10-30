@@ -8,15 +8,11 @@
 		<true/>
 	</dict>
 	<key>SUEnableAutomaticChecks</key>
-	<false/>
-	<key>SUEnableDownloaderService</key>
-	<true/>
-	<key>SUEnableInstallerLauncherService</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://TheBoredTeam.github.io/boring.notch/appcast.xml</string>
+	<string>https://github.com/jackh54/notch/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>B1Y47t8C/v8ImurYA+9arEsuCrpxwJSviekiflMElbI=</string>
+	<string>odduAQDn2EKI9X9cIiVOwrQ0EPY7Yd44D+JrzC41/S8=</string>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict/>

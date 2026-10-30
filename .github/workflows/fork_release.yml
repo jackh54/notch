@@ -80,6 +80,17 @@ jobs:
             "Release/$PROJECT_NAME.dmg" \
             "$APP_NAME $VERSION"
 
+      - name: Write signed appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          ./scripts/write-appcast.sh \
+            build/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update \
+            "Release/$APP_NAME.app" \
+            "Release/$PROJECT_NAME.dmg" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$PROJECT_NAME.dmg" \
+            Release/appcast.xml
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -93,9 +104,9 @@ jobs:
           xattr -dr com.apple.quarantine "/Applications/Boring Notch.app"
           ```
 
-          Don't use **Check for Updates** in the app: it points at upstream and replaces this fork. Get new versions from this page.
+          The app checks this fork for updates and asks before installing one. Coming from v2.7.3-agents.1? That build can't see this feed, so install this DMG by hand once.
           NOTES
-          gh release create "$GITHUB_REF_NAME" "Release/$PROJECT_NAME.dmg" \
+          gh release create "$GITHUB_REF_NAME" "Release/$PROJECT_NAME.dmg" Release/appcast.xml \
             --repo "$GITHUB_REPOSITORY" \
             --title "$APP_NAME $VERSION" \
             --notes-file "$RUNNER_TEMP/notes.md"
