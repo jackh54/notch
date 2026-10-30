@@ -50,6 +50,8 @@ enum ClaudeSessionSource {
             let cwd = entry.cwd ?? ""
             let milliseconds = entry.statusUpdatedAt ?? entry.updatedAt ?? entry.startedAt ?? 0
             let name = entry.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let transcript = transcriptURL(sessionId: entry.sessionId, cwd: cwd)
+            let tail = transcript.flatMap { transcriptTail($0, sessionId: entry.sessionId) }
 
             return AgentSession(
                 provider: .claude,
@@ -57,48 +59,63 @@ enum ClaudeSessionSource {
                 title: name.isEmpty ? (cwd as NSString).lastPathComponent : name,
                 cwd: cwd,
                 state: entry.status == "busy" ? .working : .idle,
-                lastMessage: lastAssistantMessage(sessionId: entry.sessionId, cwd: cwd),
+                lastMessage: tail?.message.map { AgentText.oneLine($0, limit: 600) },
                 updatedAt: Date(timeIntervalSince1970: milliseconds / 1000),
                 pid: entry.pid,
-                host: entry.entrypoint
+                host: entry.entrypoint,
+                turnStartedAt: entry.status == "busy" ? Date(timeIntervalSince1970: milliseconds / 1000) : nil,
+                fullMessage: tail?.message,
+                model: tail?.model,
+                gitBranch: tail?.gitBranch,
+                usage: transcript.map(AgentUsageReader.claudeUsage) ?? AgentTokenUsage()
             )
         }
     }
 
     // MARK: Transcript
 
-    private static let cacheLock = NSLock()
-    private static var messageCache: [String: (modified: Date, message: String?)] = [:]
+    private struct TranscriptTail {
+        var message: String?
+        var model: String?
+        var gitBranch: String?
+    }
 
-    /// The last thing Claude said, read from the tail of the session transcript.
-    private static func lastAssistantMessage(sessionId: String, cwd: String) -> String? {
+    private static let cacheLock = NSLock()
+    private static var tailCache: [String: (modified: Date, tail: TranscriptTail)] = [:]
+
+    /// Transcripts live in a folder named after the cwd with non-alphanumerics replaced by "-".
+    static func transcriptURL(sessionId: String, cwd: String) -> URL? {
         guard !cwd.isEmpty else { return nil }
-        // Transcripts live in a folder named after the cwd with non-alphanumerics replaced by "-".
         let folder = String(cwd.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
-        let url = AgentPaths.claudeProjects.appendingPathComponent("\(folder)/\(sessionId).jsonl")
+        return AgentPaths.claudeProjects.appendingPathComponent("\(folder)/\(sessionId).jsonl")
+    }
+
+    /// The last thing Claude said and the model and branch it was on.
+    private static func transcriptTail(_ url: URL, sessionId: String) -> TranscriptTail? {
         guard let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         else { return nil }
 
         cacheLock.lock()
-        let cached = messageCache[sessionId]
+        let cached = tailCache[sessionId]
         cacheLock.unlock()
-        if let cached, cached.modified == modified { return cached.message }
+        if let cached, cached.modified == modified { return cached.tail }
 
-        let message = readLastAssistantMessage(url)
+        let tail = readTranscriptTail(url)
         cacheLock.lock()
-        messageCache[sessionId] = (modified, message)
+        tailCache[sessionId] = (modified, tail)
         cacheLock.unlock()
-        return message
+        return tail
     }
 
-    private static func readLastAssistantMessage(_ url: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+    private static func readTranscriptTail(_ url: URL) -> TranscriptTail {
+        var tail = TranscriptTail()
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return tail }
         defer { try? handle.close() }
 
         let size = (try? handle.seekToEnd()) ?? 0
         let window: UInt64 = 512 * 1024
         try? handle.seek(toOffset: size > window ? size - window : 0)
-        guard let data = try? handle.readToEnd() else { return nil }
+        guard let data = try? handle.readToEnd() else { return tail }
 
         for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
             guard line.range(of: Data("\"type\":\"assistant\"".utf8)) != nil,
@@ -109,13 +126,18 @@ enum ClaudeSessionSource {
                   let content = message["content"] as? [[String: Any]]
             else { continue }
 
+            if tail.gitBranch == nil { tail.gitBranch = object["gitBranch"] as? String }
+            // Locally generated messages carry a placeholder such as "<synthetic>".
+            if tail.model == nil, let model = message["model"] as? String, !model.hasPrefix("<") { tail.model = model }
+
             let text = content.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
-                .joined(separator: " ")
+                .joined(separator: "\n\n")
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return AgentText.oneLine(text, limit: 600)
+                tail.message = AgentText.clipped(text)
+                break
             }
         }
-        return nil
+        return tail
     }
 
     private static func isAlive(_ pid: Int32) -> Bool {
@@ -142,7 +164,7 @@ enum CodexSessionSource {
 
         let sql = """
             SELECT id, COALESCE(NULLIF(name, ''), NULLIF(title, ''), ''), cwd, updated_at,
-                   COALESCE(preview, ''), COALESCE(rollout_path, ''), COALESCE(originator, '')
+                   COALESCE(preview, ''), COALESCE(rollout_path, ''), COALESCE(originator, ''), COALESCE(git_branch, '')
             FROM threads
             WHERE archived = 0 AND thread_source = 'user' AND updated_at >= ?
             ORDER BY updated_at DESC LIMIT ?
@@ -161,7 +183,9 @@ enum CodexSessionSource {
             }
             let cwd = text(2)
             let title = text(1)
-            let tail = rolloutTail(path: text(5))
+            let rollout = text(5)
+            let gitBranch = text(7)
+            let tail = rolloutTail(path: rollout)
 
             sessions.append(AgentSession(
                 provider: .codex,
@@ -169,9 +193,13 @@ enum CodexSessionSource {
                 title: title.isEmpty ? (cwd as NSString).lastPathComponent : AgentText.oneLine(title, limit: 80),
                 cwd: cwd,
                 state: tail.isRunning ? .working : .idle,
-                lastMessage: tail.lastMessage ?? AgentText.oneLine(text(4)),
+                lastMessage: tail.lastMessage.map { AgentText.oneLine($0, limit: 600) } ?? AgentText.oneLine(text(4)),
                 updatedAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 3))),
-                host: text(6)
+                host: text(6),
+                fullMessage: tail.lastMessage,
+                model: tail.model,
+                gitBranch: gitBranch.isEmpty ? nil : gitBranch,
+                usage: rollout.isEmpty ? AgentTokenUsage() : AgentUsageReader.codexUsage(rollout: rollout)
             ))
         }
         return sessions
@@ -188,25 +216,31 @@ enum CodexSessionSource {
     }
 
     /// A turn is running when the newest turn marker in the rollout is `task_started`.
-    private static func rolloutTail(path: String) -> (isRunning: Bool, lastMessage: String?) {
-        guard !path.isEmpty, let handle = FileHandle(forReadingAtPath: path) else { return (false, nil) }
+    private static func rolloutTail(path: String) -> (isRunning: Bool, lastMessage: String?, model: String?) {
+        guard !path.isEmpty, let handle = FileHandle(forReadingAtPath: path) else { return (false, nil, nil) }
         defer { try? handle.close() }
 
         let size = (try? handle.seekToEnd()) ?? 0
         let window: UInt64 = 256 * 1024
         try? handle.seek(toOffset: size > window ? size - window : 0)
-        guard let data = try? handle.readToEnd() else { return (false, nil) }
+        guard let data = try? handle.readToEnd() else { return (false, nil, nil) }
 
         var isRunning: Bool?
         var lastMessage: String?
+        var model: String?
         for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
-            // Cheap pre-filter: only event lines matter and rollouts are large.
-            guard line.range(of: Data("\"event_msg\"".utf8)) != nil,
+            // Cheap pre-filter: only event and turn lines matter and rollouts are large.
+            let isTurnContext = line.range(of: Data("\"turn_context\"".utf8)) != nil
+            guard isTurnContext || line.range(of: Data("\"event_msg\"".utf8)) != nil,
                   let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
-                  object["type"] as? String == "event_msg",
-                  let payload = object["payload"] as? [String: Any],
-                  let type = payload["type"] as? String
+                  let payload = object["payload"] as? [String: Any]
             else { continue }
+
+            if object["type"] as? String == "turn_context" {
+                if model == nil { model = payload["model"] as? String }
+                continue
+            }
+            guard object["type"] as? String == "event_msg", let type = payload["type"] as? String else { continue }
 
             switch type {
             case "task_started":
@@ -214,17 +248,17 @@ enum CodexSessionSource {
             case "task_complete", "turn_aborted":
                 if isRunning == nil { isRunning = false }
                 if lastMessage == nil, let message = payload["last_agent_message"] as? String {
-                    lastMessage = AgentText.oneLine(message, limit: 600)
+                    lastMessage = AgentText.clipped(message)
                 }
             case "agent_message":
                 if lastMessage == nil, let message = payload["message"] as? String {
-                    lastMessage = AgentText.oneLine(message, limit: 600)
+                    lastMessage = AgentText.clipped(message)
                 }
             default:
                 break
             }
-            if isRunning != nil && lastMessage != nil { break }
+            if isRunning != nil && lastMessage != nil && model != nil { break }
         }
-        return (isRunning ?? false, lastMessage)
+        return (isRunning ?? false, lastMessage, model)
     }
 }

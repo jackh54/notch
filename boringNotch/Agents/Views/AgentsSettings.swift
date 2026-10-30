@@ -98,6 +98,7 @@ struct AgentsSettings: View {
         AgentHookRow(
             provider: provider,
             isInstalled: installed[provider] ?? false,
+            needsUpdate: AgentHookInstaller.needsUpdate(provider),
             toggle: { toggleHooks(provider) }
         )
         .disabled(!enableAgents)
@@ -127,18 +128,24 @@ struct AgentsSettings: View {
 private struct AgentHookRow: View {
     let provider: AgentProvider
     let isInstalled: Bool
+    let needsUpdate: Bool
     let toggle: () -> Void
+
+    private var status: String {
+        if needsUpdate { return "Update available" }
+        return isInstalled ? "Installed" : "Not installed"
+    }
 
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
                 Text(provider.displayName)
-                Text(isInstalled ? "Installed" : "Not installed")
+                Text(status)
                     .font(.caption)
-                    .foregroundStyle(isInstalled ? .green : .secondary)
+                    .foregroundStyle(needsUpdate ? .orange : isInstalled ? .green : .secondary)
             }
             Spacer()
-            Button(isInstalled ? "Remove" : "Install", action: toggle)
+            Button(needsUpdate ? "Update" : isInstalled ? "Remove" : "Install", action: toggle)
         }
     }
 }

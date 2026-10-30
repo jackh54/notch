@@ -87,6 +87,17 @@ struct AgentSession: Identifiable, Equatable {
     var pid: Int32?
     /// Where the session runs ("claude-desktop", "cli", "Codex Desktop", ...).
     var host: String?
+    /// When the current turn began; nil while idle.
+    var turnStartedAt: Date?
+    /// The newest tool calls of the current turn, oldest first.
+    var recentTools: [AgentToolCall] = []
+    var subagentCount: Int = 0
+    /// The last message with its Markdown intact; `lastMessage` is the one-line form.
+    var fullMessage: String?
+    var model: String?
+    var gitBranch: String?
+    var usage = AgentTokenUsage()
+    var tokensPerMinute: Int = 0
 
     var id: String { AgentSession.key(provider, sessionId) }
 
@@ -106,6 +117,11 @@ struct AgentSession: Identifiable, Equatable {
         json["activity"] = activity
         json["lastMessage"] = lastMessage
         json["host"] = host
+        json["model"] = model
+        json["gitBranch"] = gitBranch
+        json["subagents"] = subagentCount
+        json["tokens"] = usage.total(includingCached: Defaults[.agentsCountCachedTokens])
+        json["tokensPerMinute"] = tokensPerMinute
         return json
     }
 
@@ -127,6 +143,99 @@ struct AgentSession: Identifiable, Equatable {
     }
 }
 
+/// One tool call from hook events.
+struct AgentToolCall: Identifiable, Equatable {
+    let id: UUID
+    let toolUseID: String?
+    let name: String
+    let detail: String
+    let startedAt: Date
+    var finishedAt: Date?
+    var failed: Bool = false
+}
+
+/// Tokens used by a session, split the way providers bill them.
+struct AgentTokenUsage: Equatable {
+    var input = 0
+    var output = 0
+    var cacheCreation = 0
+    var cacheRead = 0
+
+    /// Cache reads repeat the whole context on every call, so by default only new tokens count.
+    func total(includingCached: Bool) -> Int {
+        input + output + cacheCreation + (includingCached ? cacheRead : 0)
+    }
+
+    func adding(_ other: AgentTokenUsage) -> AgentTokenUsage {
+        AgentTokenUsage(
+            input: input + other.input, output: output + other.output,
+            cacheCreation: cacheCreation + other.cacheCreation, cacheRead: cacheRead + other.cacheRead)
+    }
+
+    /// The tokens added since `earlier`, never negative.
+    func removing(_ earlier: AgentTokenUsage) -> AgentTokenUsage {
+        AgentTokenUsage(
+            input: max(0, input - earlier.input), output: max(0, output - earlier.output),
+            cacheCreation: max(0, cacheCreation - earlier.cacheCreation),
+            cacheRead: max(0, cacheRead - earlier.cacheRead))
+    }
+
+    static func += (left: inout AgentTokenUsage, right: AgentTokenUsage) {
+        left = left.adding(right)
+    }
+}
+
+/// What a tool call will do, in a form the approval card can present.
+enum AgentToolPreview: Equatable {
+    case command(String)
+    case edit(path: String, old: String, new: String)
+    case write(path: String, lineCount: Int)
+    case web(url: String)
+    case generic(String)
+
+    /// Matches on the input's shape rather than the tool name, so Codex tools work too.
+    init(input: [String: Any]?, detail: String) {
+        let path = input?["file_path"] as? String ?? input?["path"] as? String
+        if let path, let old = input?["old_string"] as? String, let new = input?["new_string"] as? String {
+            self = .edit(path: path, old: old, new: new)
+        } else if let path, let content = input?["content"] as? String {
+            self = .write(path: path, lineCount: content.split(separator: "\n", omittingEmptySubsequences: false).count)
+        } else if let url = input?["url"] as? String {
+            self = .web(url: url)
+        } else if input?["command"] != nil, !detail.isEmpty {
+            self = .command(detail)
+        } else {
+            self = .generic(detail)
+        }
+    }
+}
+
+/// An allow rule Claude Code offers for a permission prompt.
+struct AgentPermissionRule: Equatable {
+    let toolName: String
+    let ruleContent: String?
+
+    var label: String {
+        ruleContent.map { "\(toolName)(\($0))" } ?? toolName
+    }
+
+    /// Reads the `addRules` allow entries of `permission_suggestions`. Other suggestions,
+    /// such as switching the permission mode, are ignored on purpose.
+    static func rules(fromSuggestions suggestions: [[String: Any]]?) -> [AgentPermissionRule] {
+        (suggestions ?? []).flatMap { suggestion -> [AgentPermissionRule] in
+            guard suggestion["type"] as? String == "addRules",
+                  suggestion["behavior"] as? String == "allow",
+                  let rules = suggestion["rules"] as? [[String: Any]]
+            else { return [] }
+            return rules.compactMap { rule in
+                (rule["toolName"] as? String).map {
+                    AgentPermissionRule(toolName: $0, ruleContent: rule["ruleContent"] as? String)
+                }
+            }
+        }
+    }
+}
+
 /// A tool-permission prompt an agent is blocked on, answerable from the notch.
 struct AgentApprovalRequest: Identifiable, Equatable {
     let id: UUID
@@ -134,6 +243,9 @@ struct AgentApprovalRequest: Identifiable, Equatable {
     let provider: AgentProvider
     let toolName: String
     let detail: String
+    let preview: AgentToolPreview
+    /// Rules that "Allow for session" can apply; empty when none are on offer.
+    let sessionRules: [AgentPermissionRule]
     let receivedAt: Date
 }
 
@@ -226,6 +338,7 @@ extension Defaults.Keys {
     static let agentsHookToken = Key<String>("agentsHookToken", default: "")
     static let agentsNewTaskProvider = Key<AgentProvider>("agentsNewTaskProvider", default: .claude)
     static let agentsLastDirectory = Key<String>("agentsLastDirectory", default: "")
+    static let agentsCountCachedTokens = Key<Bool>("agentsCountCachedTokens", default: false)
 }
 
 enum AgentText {
@@ -235,6 +348,11 @@ enum AgentText {
         let plain = text.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
         let collapsed = plain.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
         return collapsed.count > limit ? String(collapsed.prefix(limit)) + "…" : collapsed
+    }
+
+    /// Keeps Markdown intact but bounds what a session holds on to.
+    static func clipped(_ text: String, limit: Int = 8000) -> String {
+        text.count > limit ? String(text.prefix(limit)) + "…" : text
     }
 
     /// A short human description of a tool call from its hook payload.

@@ -35,7 +35,12 @@ final class AgentManager: ObservableObject {
         var state: AgentSessionState = .idle
         var activity: String?
         var lastMessage: String?
+        var fullMessage: String?
         var updatedAt: Date = .now
+        var turnStartedAt: Date?
+        var recentTools: [AgentToolCall] = []
+        var subagentCount = 0
+        var transcriptPath: String?
     }
 
     private var hookInfo: [String: HookInfo] = [:]
@@ -46,6 +51,11 @@ final class AgentManager: ObservableObject {
     /// The original tool input of each pending question, echoed back with the answers.
     private var questionInputs: [UUID: [String: Any]] = [:]
     private var runProcesses: [String: Process] = [:]
+    /// Usage of sessions the registry doesn't list, read from the transcript their hooks named.
+    private var hookUsage: [String: AgentTokenUsage] = [:]
+    /// The last usage seen per session, so only new tokens count as flow.
+    private var usageBaselines: [String: AgentTokenUsage] = [:]
+    private var usageSamples: [String: [(date: Date, tokens: Int)]] = [:]
     /// The request the user stepped to, if they moved away from the oldest one.
     private var focusedRequestID: UUID?
     private var requestShownAt: Date = .distantPast
@@ -61,6 +71,8 @@ final class AgentManager: ObservableObject {
     private static let stalledWorkLifetime: TimeInterval = 10 * 60
     /// Input is ignored for this long after a card appears, so a click aimed at the previous card can't land on it.
     private static let requestArmDelay: TimeInterval = 0.4
+    private static let recentToolLimit = 5
+    private static let usageRateWindow: TimeInterval = 60
 
     private init() {}
 
@@ -109,11 +121,17 @@ final class AgentManager: ObservableObject {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                let loaded = await Task.detached(priority: .utility) {
-                    ClaudeSessionSource.load() + CodexSessionSource.load()
+                let transcripts = self?.hookTranscripts ?? [:]
+                let (loaded, usage) = await Task.detached(priority: .utility) {
+                    let sessions = ClaudeSessionSource.load() + CodexSessionSource.load()
+                    let polledKeys = Set(sessions.map(\.id))
+                    let usage = transcripts.filter { !polledKeys.contains($0.key) }
+                        .mapValues { AgentUsageReader.claudeUsage(transcript: URL(fileURLWithPath: $0)) }
+                    return (sessions, usage)
                 }.value
                 guard !Task.isCancelled else { return }
                 self?.polled = loaded
+                self?.hookUsage = usage
                 self?.publish()
                 try? await Task.sleep(for: .seconds(2))
             }
@@ -217,6 +235,11 @@ final class AgentManager: ObservableObject {
         return try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
+    /// Claude transcripts learned from hooks, for sessions that may never reach the registry.
+    private var hookTranscripts: [String: String] {
+        hookInfo.compactMapValues(\.transcriptPath)
+    }
+
     // MARK: - Merging
 
     private func publish() {
@@ -233,6 +256,10 @@ final class AgentManager: ObservableObject {
             if var session = merged[key] {
                 if let activity = info.activity { session.activity = activity }
                 if let message = info.lastMessage { session.lastMessage = message }
+                if let message = info.fullMessage { session.fullMessage = message }
+                if let started = info.turnStartedAt { session.turnStartedAt = started }
+                session.recentTools = info.recentTools
+                session.subagentCount = info.subagentCount
                 // Hooks know about prompts the session registry doesn't; trust them unless they're older.
                 if info.state.needsAttention, info.updatedAt > session.updatedAt.addingTimeInterval(-2) {
                     session.state = info.state
@@ -254,6 +281,12 @@ final class AgentManager: ObservableObject {
             merged[question.sessionKey]?.state = .waiting
         }
 
+        for key in merged.keys {
+            if merged[key]?.usage == AgentTokenUsage(), let usage = hookUsage[key] { merged[key]?.usage = usage }
+            if merged[key]?.state == .idle { merged[key]?.turnStartedAt = nil }
+        }
+        recordUsage(&merged, now: now)
+
         // Sessions with a request keep their queue position so rows don't move under the pointer.
         var requestOrder: [String: Int] = [:]
         for (index, request) in pendingRequests.enumerated() where requestOrder[request.sessionKey] == nil {
@@ -266,7 +299,8 @@ final class AgentManager: ObservableObject {
             if leftOrder != rightOrder { return leftOrder < rightOrder }
             if $0.state.needsAttention != $1.state.needsAttention { return $0.state.needsAttention }
             if ($0.state == .working) != ($1.state == .working) { return $0.state == .working }
-            return $0.updatedAt > $1.updatedAt
+            // Working rows sort by when they started, which unlike updatedAt doesn't change on every tool call.
+            return ($0.turnStartedAt ?? $0.updatedAt) > ($1.turnStartedAt ?? $1.updatedAt)
         }
 
         announceTransitions(from: sessions, to: sorted)
@@ -275,6 +309,24 @@ final class AgentManager: ObservableObject {
         }
 
         hookInfo = hookInfo.filter { now.timeIntervalSince($0.value.updatedAt) < Self.hookOnlyLifetime }
+    }
+
+    /// Turns growth in each session's usage into a rate and into tokens for the particle stream.
+    private func recordUsage(_ sessions: inout [String: AgentSession], now: Date) {
+        let includeCached = Defaults[.agentsCountCachedTokens]
+        for (key, session) in sessions where session.usage != AgentTokenUsage() {
+            let delta = session.usage.removing(usageBaselines[key] ?? session.usage)
+            usageBaselines[key] = session.usage
+
+            let tokens = delta.total(includingCached: includeCached)
+            if tokens > 0 {
+                usageSamples[key, default: []].append((now, tokens))
+                AgentTokenFlow.shared.add(tokens, from: session.provider)
+            }
+            let recent = (usageSamples[key] ?? []).filter { now.timeIntervalSince($0.date) < Self.usageRateWindow }
+            usageSamples[key] = recent
+            sessions[key]?.tokensPerMinute = recent.reduce(0) { $0 + $1.tokens }
+        }
     }
 
     /// A session we only know from hook events (e.g. a headless run with no registry entry).
@@ -293,7 +345,11 @@ final class AgentManager: ObservableObject {
             state: state,
             activity: info.activity,
             lastMessage: info.lastMessage,
-            updatedAt: info.updatedAt
+            updatedAt: info.updatedAt,
+            turnStartedAt: info.turnStartedAt,
+            recentTools: info.recentTools,
+            subagentCount: info.subagentCount,
+            fullMessage: info.fullMessage
         )
     }
 
@@ -342,10 +398,13 @@ final class AgentManager: ObservableObject {
         let key = AgentSession.key(provider, sessionId)
         var info = hookInfo[key] ?? HookInfo()
         if let cwd = payload["cwd"] as? String { info.cwd = cwd }
+        if provider == .claude, let path = payload["transcript_path"] as? String { info.transcriptPath = path }
         info.updatedAt = .now
 
         let toolName = payload["tool_name"] as? String ?? ""
-        let toolDetail = AgentText.toolDetail(name: toolName, input: payload["tool_input"] as? [String: Any])
+        let toolInput = payload["tool_input"] as? [String: Any]
+        let toolDetail = AgentText.toolDetail(name: toolName, input: toolInput)
+        let toolUseID = payload["tool_use_id"] as? String
         var holdsReply = false
 
         switch event {
@@ -354,8 +413,10 @@ final class AgentManager: ObservableObject {
         case "UserPromptSubmit":
             info.state = .working
             info.activity = "Thinking…"
+            info.turnStartedAt = .now
+            info.recentTools = []
+            info.subagentCount = 0
         case "PreToolUse" where toolName == AgentHookInstaller.questionTool:
-            let toolInput = payload["tool_input"] as? [String: Any]
             let parsed = AgentQuestionRequest.questions(fromToolInput: toolInput)
             info.state = .waiting
             info.activity = AgentText.oneLine(parsed.first?.text ?? "Asking a question")
@@ -369,12 +430,26 @@ final class AgentManager: ObservableObject {
         case "PreToolUse":
             info.state = .working
             info.activity = AgentText.oneLine(toolDetail.isEmpty ? toolName : "\(toolName): \(toolDetail)")
+            info.recentTools.append(AgentToolCall(
+                id: UUID(), toolUseID: toolUseID, name: toolName,
+                detail: AgentText.oneLine(toolDetail, limit: 120), startedAt: .now))
+            info.recentTools.removeFirst(max(0, info.recentTools.count - Self.recentToolLimit))
         case "PermissionRequest" where toolName == AgentHookInstaller.questionTool:
             // Reached when the question was handed back to the agent; its own dialog collects the answer.
             info.state = .waiting
         case "PostToolUse", "PostToolUseFailure":
             info.state = .working
             dropApprovals(forSession: key)
+            let call = info.recentTools.lastIndex { $0.finishedAt == nil && $0.toolUseID == toolUseID && toolUseID != nil }
+                ?? info.recentTools.lastIndex { $0.finishedAt == nil && $0.name == toolName }
+            if let call {
+                info.recentTools[call].finishedAt = .now
+                info.recentTools[call].failed = event == "PostToolUseFailure"
+            }
+        case "SubagentStart":
+            info.subagentCount += 1
+        case "SubagentStop":
+            info.subagentCount = max(0, info.subagentCount - 1)
         case "PermissionRequest":
             info.state = .needsApproval
             info.activity = AgentText.oneLine(toolDetail.isEmpty ? toolName : "\(toolName): \(toolDetail)")
@@ -384,7 +459,11 @@ final class AgentManager: ObservableObject {
                 holdsReply = true
                 approvals.append(AgentApprovalRequest(
                     id: requestID, sessionKey: key, provider: provider,
-                    toolName: toolName, detail: toolDetail, receivedAt: .now))
+                    toolName: toolName, detail: toolDetail,
+                    preview: AgentToolPreview(input: toolInput, detail: toolDetail),
+                    sessionRules: provider == .claude ? AgentPermissionRule.rules(
+                        fromSuggestions: payload["permission_suggestions"] as? [[String: Any]]) : [],
+                    receivedAt: .now))
             }
         case "Notification":
             let type = payload["notification_type"] as? String ?? ""
@@ -395,8 +474,11 @@ final class AgentManager: ObservableObject {
         case "Stop":
             info.state = .idle
             info.activity = nil
+            info.turnStartedAt = nil
+            info.subagentCount = 0
             if let message = payload["last_assistant_message"] as? String, !message.isEmpty {
                 info.lastMessage = AgentText.oneLine(message, limit: 600)
+                info.fullMessage = AgentText.clipped(message)
             }
             dropApprovals(forSession: key)
         case "SessionEnd":
@@ -426,14 +508,31 @@ final class AgentManager: ObservableObject {
         resolve(approval, allow: false)
     }
 
+    /// Allows this call and adds Claude's suggested rules for the rest of the session.
+    /// The destination is always "session", so nothing is written to settings files.
+    func allowForSession(_ approval: AgentApprovalRequest) {
+        guard requestIsArmed, !approval.sessionRules.isEmpty else { return }
+        resolve(approval, allow: true, sessionRules: approval.sessionRules)
+    }
+
     /// `allow == nil` hands the decision back to the agent's own prompt.
-    private func resolve(_ approval: AgentApprovalRequest, allow: Bool?) {
+    private func resolve(_ approval: AgentApprovalRequest, allow: Bool?, sessionRules: [AgentPermissionRule] = []) {
         guard let reply = pendingReplies.removeValue(forKey: approval.id) else { return }
         approvals.removeAll { $0.id == approval.id }
 
         if let allow {
             var decision: [String: Any] = ["behavior": allow ? "allow" : "deny"]
             if !allow { decision["message"] = "Denied from the notch." }
+            if !sessionRules.isEmpty {
+                let rules = sessionRules.map { rule -> [String: Any] in
+                    var entry: [String: Any] = ["toolName": rule.toolName]
+                    entry["ruleContent"] = rule.ruleContent
+                    return entry
+                }
+                decision["updatedPermissions"] = [[
+                    "type": "addRules", "rules": rules, "behavior": "allow", "destination": "session",
+                ] as [String: Any]]
+            }
             let body: [String: Any] = [
                 "hookSpecificOutput": ["hookEventName": "PermissionRequest", "decision": decision]
             ]
@@ -545,7 +644,8 @@ final class AgentManager: ObservableObject {
             localRuns[key] = AgentSession(
                 provider: .claude, sessionId: runID,
                 title: AgentText.oneLine(session.map { "↩ \($0.title): \(prompt)" } ?? prompt, limit: 80),
-                cwd: directory, state: .working, activity: "Starting…", updatedAt: .now, host: "notch")
+                cwd: directory, state: .working, activity: "Starting…", updatedAt: .now, host: "notch",
+                turnStartedAt: .now)
             runKey = key
             publish()
         }
@@ -567,6 +667,7 @@ final class AgentManager: ObservableObject {
                 localRuns[runKey]?.updatedAt = .now
                 if !result.output.isEmpty {
                     localRuns[runKey]?.lastMessage = AgentText.oneLine(result.output, limit: 600)
+                    localRuns[runKey]?.fullMessage = AgentText.clipped(result.output)
                 }
             }
             if result.status != 0 {
