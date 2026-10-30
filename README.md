@@ -40,7 +40,7 @@ Set it up in **Settings → Agents**: install the hooks for Claude Code and Code
 
 For scripts, the app serves the session list as JSON at `GET /status` and opens the Agents tab on `POST /open`, on the same loopback port and token as the hook script (`~/Library/Application Support/boringNotch/notch-agent-hook`).
 
-Differences from upstream that matter: the app sandbox is off (it has to read `~/.claude` and `~/.codex` and launch the CLIs), and Sparkle's automatic update checks are off so upstream builds don't replace the fork.
+Differences from upstream that matter: the app sandbox is off (it has to read `~/.claude` and `~/.codex` and launch the CLIs), and updates come from this fork's releases, signed with this fork's Sparkle key.
 
 ### Install this fork
 
@@ -52,7 +52,7 @@ Differences from upstream that matter: the app sandbox is off (it has to read `~
 xattr -dr com.apple.quarantine "/Applications/Boring Notch.app"
 ```
 
-Get new versions from [Releases](https://github.com/jackh54/notch/releases). **Check for Updates** in the app still points at upstream and would replace this fork. The Installation section further down also describes upstream's build.
+The app checks this fork's [Releases](https://github.com/jackh54/notch/releases) for updates and asks before installing one. macOS may ask for permissions such as Accessibility again after an update, because each build is signed ad hoc. If you installed `v2.7.3-agents.1`, install the latest DMG by hand once, because that build checks upstream instead. The Installation section further down describes upstream's build.
 
 Pushing a tag such as `v2.7.3-agents.1` builds and publishes a release.
 
