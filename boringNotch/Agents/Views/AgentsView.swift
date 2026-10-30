@@ -6,6 +6,7 @@
 //
 
 import Defaults
+import KeyboardShortcuts
 import SwiftUI
 
 struct AgentsView: View {
@@ -52,6 +53,9 @@ struct AgentsView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
                 }
+            }
+            if let error = agents.lastError {
+                errorStrip(error)
             }
             promptBar
         }
@@ -107,8 +111,44 @@ struct AgentsView: View {
             Text("No active Claude Code or Codex sessions")
                 .font(.system(.callout, design: .rounded))
                 .foregroundStyle(.gray)
+            Button {
+                agents.openForTyping()
+            } label: {
+                HStack(spacing: 4) {
+                    Text("Start a task in \(AgentText.abbreviated(path: directory))")
+                    if let hint = KeyboardShortcuts.getShortcut(for: .openAgents)?.description {
+                        Text(hint).foregroundStyle(.gray)
+                    }
+                }
+                .font(.system(.caption, design: .rounded))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.8))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func errorStrip(_ error: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text(error)
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(2)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+            Button {
+                agents.lastError = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.gray)
+        }
+        .font(.system(size: 10))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - Prompt
@@ -143,12 +183,6 @@ struct AgentsView: View {
                     vm.close()
                 }
 
-            if let error = agents.lastError {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.yellow)
-                    .help(error)
-            }
-
             Button(action: submit) {
                 Image(systemName: "arrow.up.circle.fill")
                     .imageScale(.large)
@@ -175,7 +209,7 @@ struct AgentsView: View {
 
             Menu {
                 ForEach(agents.knownDirectories, id: \.self) { path in
-                    Button(path.replacingOccurrences(of: AgentPaths.home.path, with: "~")) { lastDirectory = path }
+                    Button(AgentText.abbreviated(path: path)) { lastDirectory = path }
                 }
                 Divider()
                 Button("Home folder") { lastDirectory = AgentPaths.home.path }
@@ -200,8 +234,7 @@ struct AgentsView: View {
     private func focusPromptIfRequested() {
         guard agents.wantsPromptFocus else { return }
         agents.wantsPromptFocus = false
-        // The notch panel only takes key focus on demand, so ask for it before focusing the field.
-        NSApp.windows.first { $0 is BoringNotchSkyLightWindow && $0.isVisible }?.makeKey()
+        agents.makeNotchKey()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             promptFocused = true
         }
@@ -246,9 +279,18 @@ struct AgentSessionRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            if session.state == .idle {
-                Text(session.age())
+            if session.subagentCount > 0 {
+                HStack(spacing: 2) {
+                    Image(systemName: "person.2.fill")
+                    Text("\(session.subagentCount)")
+                }
+                .font(.system(size: 9, design: .rounded))
+                .foregroundStyle(.gray)
+            }
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(trailingTime(now: context.date))
                     .font(.system(size: 9, design: .rounded))
+                    .monospacedDigit()
                     .foregroundStyle(.gray.opacity(0.7))
             }
         }
@@ -259,6 +301,11 @@ struct AgentSessionRow: View {
                 .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
         )
         .contentShape(Rectangle())
+    }
+
+    /// How long a turn has been running, or how long ago an idle session last moved.
+    private func trailingTime(now: Date) -> String {
+        session.turnStartedAt.map { AgentText.elapsed(since: $0, now: now) } ?? session.age(now: now)
     }
 }
 

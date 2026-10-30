@@ -152,6 +152,18 @@ struct AgentToolCall: Identifiable, Equatable {
     let startedAt: Date
     var finishedAt: Date?
     var failed: Bool = false
+
+    var icon: String {
+        switch name {
+        case "Bash", "shell", "exec_command": return "terminal"
+        case "Read": return "doc.text"
+        case "Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch": return "pencil"
+        case "Grep", "Glob": return "magnifyingglass"
+        case "WebFetch", "WebSearch": return "globe"
+        case "Agent", "Task": return "person.2"
+        default: return "wrench.and.screwdriver"
+        }
+    }
 }
 
 /// Tokens used by a session, split the way providers bill them.
@@ -348,6 +360,45 @@ enum AgentText {
         let plain = text.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
         let collapsed = plain.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
         return collapsed.count > limit ? String(collapsed.prefix(limit)) + "…" : collapsed
+    }
+
+    /// Compact token count, e.g. "940", "12.4k", "1.2M".
+    static func tokens(_ count: Int) -> String {
+        switch count {
+        case ..<1000: return "\(count)"
+        case ..<1_000_000: return compact(Double(count) / 1000, suffix: "k")
+        default: return compact(Double(count) / 1_000_000, suffix: "M")
+        }
+    }
+
+    private static func compact(_ value: Double, suffix: String) -> String {
+        let text = value < 100 ? String(format: "%.1f", value) : String(format: "%.0f", value)
+        return text.replacingOccurrences(of: ".0", with: "") + suffix
+    }
+
+    /// Time since `date`, e.g. "45s", "12m", "1h 5m".
+    static func elapsed(since date: Date, now: Date = .now) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        switch seconds {
+        case ..<60: return "\(seconds)s"
+        case ..<3600: return "\(seconds / 60)m"
+        default: return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+        }
+    }
+
+    /// Shortens a Claude model id, e.g. "claude-opus-5-5" to "Opus 5.5". Other ids pass through.
+    static func modelName(_ model: String) -> String {
+        guard model.hasPrefix("claude-") else { return model }
+        let parts = model.dropFirst("claude-".count).split(separator: "-")
+        guard let family = parts.first else { return model }
+        // A long numeric part is a date stamp rather than a version.
+        let version = parts.dropFirst().filter { $0.count <= 2 && $0.allSatisfy(\.isNumber) }
+        return ([family.capitalized] + (version.isEmpty ? [] : [version.joined(separator: ".")])).joined(separator: " ")
+    }
+
+    /// Replaces the home folder with "~".
+    static func abbreviated(path: String) -> String {
+        path.replacingOccurrences(of: AgentPaths.home.path, with: "~")
     }
 
     /// Keeps Markdown intact but bounds what a session holds on to.

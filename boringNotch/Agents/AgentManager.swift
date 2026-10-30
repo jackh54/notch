@@ -620,6 +620,11 @@ final class AgentManager: ObservableObject {
         NotificationCenter.default.post(name: .agentOpenRequested, object: nil)
     }
 
+    /// The notch panel only takes key focus on demand, so text fields ask for it first.
+    func makeNotchKey() {
+        NSApp.windows.first { $0 is BoringNotchSkyLightWindow && $0.isVisible }?.makeKey()
+    }
+
     func focus(_ session: AgentSession) {
         AgentCLI.focus(session)
     }
