@@ -159,21 +159,24 @@ struct AgentToolPreviewView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            title(toolName)
+
             switch preview {
             case .command(let command):
-                title(toolName)
                 codeBlock(command)
-            case .edit(let path, let old, let new):
-                title(AgentText.abbreviated(path: path))
+            case .edit(let path, let old, let new, let replaceAll):
+                caption(AgentText.abbreviated(path: path))
                 AgentDiffView(old: old, new: new)
+                if replaceAll { caption("Replaces every occurrence") }
             case .write(let path, let lineCount):
-                title(AgentText.abbreviated(path: path))
+                caption(AgentText.abbreviated(path: path))
                 caption(lineCount == 1 ? "Writes 1 line" : "Writes \(lineCount) lines")
             case .web(let url):
-                title(URL(string: url)?.host ?? url)
+                Text(URL(string: url)?.host ?? url)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
                 caption(url)
             case .generic(let detail):
-                title(toolName)
                 if !detail.isEmpty { codeBlock(detail) }
             }
         }
@@ -431,7 +434,11 @@ struct AgentQuestionCard: View {
         otherFocused = false
         if index + 1 < request.questions.count {
             index += 1
+            // The next question's options land under the pointer; a double click mustn't answer them.
+            agents.rearmRequest()
         } else {
+            // The card goes away with the answer, before its focus change can be seen.
+            agents.isComposing = false
             agents.answer(request, with: answers)
         }
     }

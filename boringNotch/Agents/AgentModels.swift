@@ -200,25 +200,40 @@ struct AgentTokenUsage: Equatable {
 /// What a tool call will do, in a form the approval card can present.
 enum AgentToolPreview: Equatable {
     case command(String)
-    case edit(path: String, old: String, new: String)
+    case edit(path: String, old: String, new: String, replaceAll: Bool)
     case write(path: String, lineCount: Int)
     case web(url: String)
     case generic(String)
 
-    /// Matches on the input's shape rather than the tool name, so Codex tools work too.
-    init(input: [String: Any]?, detail: String) {
-        let path = input?["file_path"] as? String ?? input?["path"] as? String
-        if let path, let old = input?["old_string"] as? String, let new = input?["new_string"] as? String {
-            self = .edit(path: path, old: old, new: new)
-        } else if let path, let content = input?["content"] as? String {
-            self = .write(path: path, lineCount: content.split(separator: "\n", omittingEmptySubsequences: false).count)
-        } else if let url = input?["url"] as? String {
-            self = .web(url: url)
-        } else if input?["command"] != nil, !detail.isEmpty {
-            self = .command(detail)
-        } else {
-            self = .generic(detail)
+    /// The special layouts leave out most of the input, so they are only for tools whose input
+    /// is known. Anything else, such as an MCP tool that happens to take a path, shows all of it.
+    init(toolName: String, input: [String: Any]?) {
+        let path = input?["file_path"] as? String
+        switch toolName {
+        case "Bash", "shell", "exec_command":
+            if let command = AgentText.commandText(input) {
+                self = .command(command)
+                return
+            }
+        case "Edit":
+            if let path, let old = input?["old_string"] as? String, let new = input?["new_string"] as? String {
+                self = .edit(path: path, old: old, new: new, replaceAll: input?["replace_all"] as? Bool ?? false)
+                return
+            }
+        case "Write":
+            if let path, let content = input?["content"] as? String {
+                self = .write(path: path, lineCount: content.split(separator: "\n", omittingEmptySubsequences: false).count)
+                return
+            }
+        case "WebFetch":
+            if let url = input?["url"] as? String {
+                self = .web(url: url)
+                return
+            }
+        default:
+            break
         }
+        self = .generic(AgentText.fullInput(input))
     }
 }
 
@@ -494,6 +509,22 @@ enum AgentText {
     /// Keeps Markdown intact but bounds what a session holds on to.
     static func clipped(_ text: String, limit: Int = 8000) -> String {
         text.count > limit ? String(text.prefix(limit)) + "…" : text
+    }
+
+    /// A shell tool's command, which Codex passes as a list of words.
+    static func commandText(_ input: [String: Any]?) -> String? {
+        if let command = input?["command"] as? String { return command }
+        return (input?["command"] as? [String])?.joined(separator: " ")
+    }
+
+    /// Every field of a tool call, for tools the approval card has no layout for.
+    static func fullInput(_ input: [String: Any]?) -> String {
+        guard let input, !input.isEmpty,
+              let data = try? JSONSerialization.data(
+                withJSONObject: input, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+              let text = String(data: data, encoding: .utf8)
+        else { return "" }
+        return text
     }
 
     /// A short human description of a tool call from its hook payload.

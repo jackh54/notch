@@ -197,6 +197,9 @@ final class AgentManager: ObservableObject {
             .sorted { $0.receivedAt < $1.receivedAt }
     }
 
+    /// Restarts `requestArmDelay`, for when a card's content changes without a new request.
+    func rearmRequest() { requestShownAt = .now }
+
     /// False just after a card appears; see `requestArmDelay`.
     var requestIsArmed: Bool {
         Date().timeIntervalSince(requestShownAt) >= Self.requestArmDelay
@@ -226,7 +229,12 @@ final class AgentManager: ObservableObject {
         refreshCurrentRequest()
     }
 
-    func requestViewAppeared() { requestViewers += 1 }
+    func requestViewAppeared() {
+        // A request may have waited a while; the delay counts from when it can first be seen.
+        if requestViewers == 0 { rearmRequest() }
+        requestViewers += 1
+    }
+
     func requestViewDisappeared() { requestViewers = max(0, requestViewers - 1) }
 
     /// The shortcuts answer the card on screen. With no card showing they open it instead,
@@ -484,7 +492,7 @@ final class AgentManager: ObservableObject {
             info.state = .waiting
         case "PostToolUse", "PostToolUseFailure":
             info.state = .working
-            dropApprovals(forSession: key)
+            dropSettledRequests(session: key, toolName: toolName, detail: toolDetail)
             let call = info.recentTools.lastIndex { $0.finishedAt == nil && $0.toolUseID == toolUseID && toolUseID != nil }
                 ?? info.recentTools.lastIndex { $0.finishedAt == nil && $0.name == toolName }
             if let call {
@@ -505,7 +513,7 @@ final class AgentManager: ObservableObject {
                 approvals.append(AgentApprovalRequest(
                     id: requestID, sessionKey: key, provider: provider,
                     toolName: toolName, detail: toolDetail,
-                    preview: AgentToolPreview(input: toolInput, detail: toolDetail),
+                    preview: AgentToolPreview(toolName: toolName, input: toolInput),
                     sessionRules: provider == .claude ? AgentPermissionRule.rules(
                         fromSuggestions: payload["permission_suggestions"] as? [[String: Any]]) : [],
                     receivedAt: .now))
@@ -616,6 +624,22 @@ final class AgentManager: ObservableObject {
         }
         approvals.removeAll { $0.sessionKey == key }
 
+        for question in questions where question.sessionKey == key {
+            pendingReplies.removeValue(forKey: question.id)?(nil)
+            questionInputs[question.id] = nil
+        }
+        questions.removeAll { $0.sessionKey == key }
+    }
+
+    /// A finished tool call settles its own prompt only; other prompts in the session still wait.
+    private func dropSettledRequests(session key: String, toolName: String, detail: String) {
+        let settled = approvals.filter { $0.sessionKey == key && $0.toolName == toolName && $0.detail == detail }
+        for approval in settled {
+            pendingReplies.removeValue(forKey: approval.id)?(nil)
+        }
+        approvals.removeAll { settled.contains($0) }
+
+        guard toolName == AgentHookInstaller.questionTool else { return }
         for question in questions where question.sessionKey == key {
             pendingReplies.removeValue(forKey: question.id)?(nil)
             questionInputs[question.id] = nil

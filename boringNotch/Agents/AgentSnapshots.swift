@@ -149,7 +149,7 @@ enum AgentSnapshots {
             preview: .edit(
                 path: AgentPaths.home.appendingPathComponent("notch/AgentModels.swift").path,
                 old: "let id: UUID\nlet title = \"Old\"\nlet size = 1",
-                new: "let id: UUID\nlet title = \"New\"\nlet size = 1"),
+                new: "let id: UUID\nlet title = \"New\"\nlet size = 1", replaceAll: false),
             sessionRules: [], receivedAt: now.addingTimeInterval(-5))
 
         static let question = AgentQuestionRequest(
