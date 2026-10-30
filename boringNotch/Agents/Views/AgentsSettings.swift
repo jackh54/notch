@@ -14,6 +14,12 @@ struct AgentsSettings: View {
     @Default(.agentsLiveActivity) var agentsLiveActivity
     @Default(.agentsOpenOnApproval) var agentsOpenOnApproval
     @Default(.agentsFinishedBanner) var agentsFinishedBanner
+    @Default(.agentsParticles) var agentsParticles
+    @Default(.agentsParticleIntensity) var particleIntensity
+    @Default(.agentsParticleColor) var particleColor
+    @Default(.agentsParticleCustomColor) var particleCustomColor
+    @Default(.agentsTokenReadout) var tokenReadout
+    @Default(.agentsClaudeIcon) var claudeIcon
 
     @State private var installed: [AgentProvider: Bool] = [:]
     @State private var errorMessage: String?
@@ -48,6 +54,60 @@ struct AgentsSettings: View {
             } header: {
                 Text("General")
             }
+
+            Section {
+                Defaults.Toggle(key: .agentsParticles) {
+                    Text("Show tokens as particles")
+                }
+                Group {
+                    Defaults.Toggle(key: .agentsParticlesClosed) {
+                        Text("In the closed notch")
+                    }
+                    Defaults.Toggle(key: .agentsParticlesOpen) {
+                        Text("In the open notch")
+                    }
+                    Picker("Intensity", selection: $particleIntensity) {
+                        ForEach(AgentParticleIntensity.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    Picker("Colour", selection: $particleColor) {
+                        ForEach(AgentParticleColor.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    if particleColor == .custom {
+                        ColorPicker("Custom colour", selection: $particleCustomColor, supportsOpacity: false)
+                    }
+                }
+                .disabled(!agentsParticles)
+
+                Picker("Token count in the closed notch", selection: $tokenReadout) {
+                    ForEach(AgentTokenReadout.allCases) { Text($0.displayName).tag($0) }
+                }
+                Defaults.Toggle(key: .agentsCountCachedTokens) {
+                    Text("Count cached tokens")
+                }
+                Picker("Claude icon", selection: $claudeIcon) {
+                    ForEach(AgentClaudeIcon.allCases) { Text($0.displayName).tag($0) }
+                }
+                Defaults.Toggle(key: .agentsAnimatePet) {
+                    Text("Animate the pet")
+                }
+                .disabled(claudeIcon != .pet)
+                Defaults.Toggle(key: .agentsAttentionGlow) {
+                    Text("Glow when a session needs you")
+                }
+                Defaults.Toggle(key: .agentsSounds) {
+                    Text("Play sounds when a session needs you or finishes")
+                }
+                Defaults.Toggle(key: .agentsPauseOnLowPower) {
+                    Text("Pause animation in Low Power Mode")
+                }
+            } header: {
+                Text("Notch animation")
+            } footer: {
+                Text("Particles only appear when tokens are actually used. Cache reads repeat the whole conversation on every call, so they are left out unless you count them. Reduce Motion in System Settings always stops the animation.")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            .disabled(!enableAgents)
 
             Section {
                 hookRow(.claude)
