@@ -8,12 +8,12 @@ Sparkle updates don't pass through this Worker, so updates keep working when it 
 
 `install_id`, `version`, `build`, `first_seen` and `last_seen`. No names or IP addresses, and invocation logs are off. Installs that go quiet for 180 days are removed.
 
-## First deploy
+## Deploying
+
+Live at `notch.pandascript.dev` on the Jack account. `STATS_TOKEN` is a Worker secret, with a copy in the login Keychain.
 
 ```bash
 npm install
-npx wrangler d1 create notch-checkin   # put the ID in wrangler.jsonc
-npx wrangler secret put STATS_TOKEN
 npm run deploy
 ```
 
@@ -22,7 +22,7 @@ npm run deploy
 ## Viewing installs
 
 ```bash
-curl -H "Authorization: Bearer $STATS_TOKEN" https://notch.pandascript.dev/stats
+curl -H "Authorization: Bearer $(security find-generic-password -a jackh54-notch -s notch-checkin-stats -w)" https://notch.pandascript.dev/stats
 ```
 
 The result lists installs per version, plus each install by the first 8 characters of its ID. The app shows the same short ID in Settings, so a friend can tell you which one is theirs.
