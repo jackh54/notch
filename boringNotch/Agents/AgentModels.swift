@@ -87,6 +87,17 @@ struct AgentSession: Identifiable, Equatable {
     var pid: Int32?
     /// Where the session runs ("claude-desktop", "cli", "Codex Desktop", ...).
     var host: String?
+    /// When the current turn began; nil while idle.
+    var turnStartedAt: Date?
+    /// The newest tool calls of the current turn, oldest first.
+    var recentTools: [AgentToolCall] = []
+    var subagentCount: Int = 0
+    /// The last message with its Markdown intact; `lastMessage` is the one-line form.
+    var fullMessage: String?
+    var model: String?
+    var gitBranch: String?
+    var usage = AgentTokenUsage()
+    var tokensPerMinute: Int = 0
 
     var id: String { AgentSession.key(provider, sessionId) }
 
@@ -106,6 +117,11 @@ struct AgentSession: Identifiable, Equatable {
         json["activity"] = activity
         json["lastMessage"] = lastMessage
         json["host"] = host
+        json["model"] = model
+        json["gitBranch"] = gitBranch
+        json["subagents"] = subagentCount
+        json["tokens"] = usage.total(includingCached: Defaults[.agentsCountCachedTokens])
+        json["tokensPerMinute"] = tokensPerMinute
         return json
     }
 
@@ -127,6 +143,126 @@ struct AgentSession: Identifiable, Equatable {
     }
 }
 
+/// One tool call from hook events.
+struct AgentToolCall: Identifiable, Equatable {
+    let id: UUID
+    let toolUseID: String?
+    let name: String
+    let detail: String
+    let startedAt: Date
+    var finishedAt: Date?
+    var failed: Bool = false
+
+    var icon: String {
+        switch name {
+        case "Bash", "shell", "exec_command": return "terminal"
+        case "Read": return "doc.text"
+        case "Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch": return "pencil"
+        case "Grep", "Glob": return "magnifyingglass"
+        case "WebFetch", "WebSearch": return "globe"
+        case "Agent", "Task": return "person.2"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+}
+
+/// Tokens used by a session, split the way providers bill them.
+struct AgentTokenUsage: Equatable {
+    var input = 0
+    var output = 0
+    var cacheCreation = 0
+    var cacheRead = 0
+
+    /// Cache reads repeat the whole context on every call, so by default only new tokens count.
+    func total(includingCached: Bool) -> Int {
+        input + output + cacheCreation + (includingCached ? cacheRead : 0)
+    }
+
+    func adding(_ other: AgentTokenUsage) -> AgentTokenUsage {
+        AgentTokenUsage(
+            input: input + other.input, output: output + other.output,
+            cacheCreation: cacheCreation + other.cacheCreation, cacheRead: cacheRead + other.cacheRead)
+    }
+
+    /// The tokens added since `earlier`, never negative.
+    func removing(_ earlier: AgentTokenUsage) -> AgentTokenUsage {
+        AgentTokenUsage(
+            input: max(0, input - earlier.input), output: max(0, output - earlier.output),
+            cacheCreation: max(0, cacheCreation - earlier.cacheCreation),
+            cacheRead: max(0, cacheRead - earlier.cacheRead))
+    }
+
+    static func += (left: inout AgentTokenUsage, right: AgentTokenUsage) {
+        left = left.adding(right)
+    }
+}
+
+/// What a tool call will do, in a form the approval card can present.
+enum AgentToolPreview: Equatable {
+    case command(String)
+    case edit(path: String, old: String, new: String, replaceAll: Bool)
+    case write(path: String, lineCount: Int)
+    case web(url: String)
+    case generic(String)
+
+    /// The special layouts leave out most of the input, so they are only for tools whose input
+    /// is known. Anything else, such as an MCP tool that happens to take a path, shows all of it.
+    init(toolName: String, input: [String: Any]?) {
+        let path = input?["file_path"] as? String
+        switch toolName {
+        case "Bash", "shell", "exec_command":
+            if let command = AgentText.commandText(input) {
+                self = .command(command)
+                return
+            }
+        case "Edit":
+            if let path, let old = input?["old_string"] as? String, let new = input?["new_string"] as? String {
+                self = .edit(path: path, old: old, new: new, replaceAll: input?["replace_all"] as? Bool ?? false)
+                return
+            }
+        case "Write":
+            if let path, let content = input?["content"] as? String {
+                self = .write(path: path, lineCount: content.split(separator: "\n", omittingEmptySubsequences: false).count)
+                return
+            }
+        case "WebFetch":
+            if let url = input?["url"] as? String {
+                self = .web(url: url)
+                return
+            }
+        default:
+            break
+        }
+        self = .generic(AgentText.fullInput(input))
+    }
+}
+
+/// An allow rule Claude Code offers for a permission prompt.
+struct AgentPermissionRule: Equatable {
+    let toolName: String
+    let ruleContent: String?
+
+    var label: String {
+        ruleContent.map { "\(toolName)(\($0))" } ?? toolName
+    }
+
+    /// Reads the `addRules` allow entries of `permission_suggestions`. Other suggestions,
+    /// such as switching the permission mode, are ignored on purpose.
+    static func rules(fromSuggestions suggestions: [[String: Any]]?) -> [AgentPermissionRule] {
+        (suggestions ?? []).flatMap { suggestion -> [AgentPermissionRule] in
+            guard suggestion["type"] as? String == "addRules",
+                  suggestion["behavior"] as? String == "allow",
+                  let rules = suggestion["rules"] as? [[String: Any]]
+            else { return [] }
+            return rules.compactMap { rule in
+                (rule["toolName"] as? String).map {
+                    AgentPermissionRule(toolName: $0, ruleContent: rule["ruleContent"] as? String)
+                }
+            }
+        }
+    }
+}
+
 /// A tool-permission prompt an agent is blocked on, answerable from the notch.
 struct AgentApprovalRequest: Identifiable, Equatable {
     let id: UUID
@@ -134,6 +270,9 @@ struct AgentApprovalRequest: Identifiable, Equatable {
     let provider: AgentProvider
     let toolName: String
     let detail: String
+    let preview: AgentToolPreview
+    /// Rules that "Allow for session" can apply; empty when none are on offer.
+    let sessionRules: [AgentPermissionRule]
     let receivedAt: Date
 }
 
@@ -155,6 +294,7 @@ struct AgentQuestionRequest: Identifiable, Equatable {
     let id: UUID
     let sessionKey: String
     let questions: [AgentQuestion]
+    let receivedAt: Date
 
     /// Parses the input of Claude Code's AskUserQuestion tool.
     static func questions(fromToolInput input: [String: Any]?) -> [AgentQuestion] {
@@ -172,10 +312,115 @@ struct AgentQuestionRequest: Identifiable, Equatable {
     }
 }
 
+/// Anything an agent is blocked on until the user answers it in the notch.
+enum AgentRequest: Identifiable, Equatable {
+    case approval(AgentApprovalRequest)
+    case question(AgentQuestionRequest)
+
+    var id: UUID {
+        switch self {
+        case .approval(let approval): return approval.id
+        case .question(let question): return question.id
+        }
+    }
+
+    var sessionKey: String {
+        switch self {
+        case .approval(let approval): return approval.sessionKey
+        case .question(let question): return question.sessionKey
+        }
+    }
+
+    var receivedAt: Date {
+        switch self {
+        case .approval(let approval): return approval.receivedAt
+        case .question(let question): return question.receivedAt
+        }
+    }
+}
+
 struct AgentBanner: Equatable {
+    enum Outcome {
+        case finished
+        case failed
+    }
+
+    let sessionKey: String
     let provider: AgentProvider
     let title: String
     let text: String
+    var outcome: Outcome = .finished
+}
+
+enum AgentParticleIntensity: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case subtle
+    case normal
+    case lively
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .subtle: return "Subtle"
+        case .normal: return "Normal"
+        case .lively: return "Lively"
+        }
+    }
+
+    /// Particles added each time a burst of tokens doubles in size.
+    var particlesPerDoubling: Double {
+        switch self {
+        case .subtle: return 1.5
+        case .normal: return 3
+        case .lively: return 6
+        }
+    }
+}
+
+enum AgentParticleColor: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case provider
+    case state
+    case custom
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .provider: return "Provider"
+        case .state: return "Session state"
+        case .custom: return "Custom"
+        }
+    }
+}
+
+enum AgentTokenReadout: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case off
+    case perMinute
+    case sessionTotal
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .perMinute: return "Per minute"
+        case .sessionTotal: return "Session total"
+        }
+    }
+}
+
+enum AgentClaudeIcon: String, CaseIterable, Identifiable, Defaults.Serializable {
+    case pet
+    case sparkle
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .pet: return "Pet"
+        case .sparkle: return "Sparkle"
+        }
+    }
 }
 
 extension Notification.Name {
@@ -198,6 +443,19 @@ extension Defaults.Keys {
     static let agentsHookToken = Key<String>("agentsHookToken", default: "")
     static let agentsNewTaskProvider = Key<AgentProvider>("agentsNewTaskProvider", default: .claude)
     static let agentsLastDirectory = Key<String>("agentsLastDirectory", default: "")
+    static let agentsCountCachedTokens = Key<Bool>("agentsCountCachedTokens", default: false)
+    static let agentsParticles = Key<Bool>("agentsParticles", default: true)
+    static let agentsParticlesClosed = Key<Bool>("agentsParticlesClosed", default: true)
+    static let agentsParticlesOpen = Key<Bool>("agentsParticlesOpen", default: true)
+    static let agentsParticleIntensity = Key<AgentParticleIntensity>("agentsParticleIntensity", default: .normal)
+    static let agentsParticleColor = Key<AgentParticleColor>("agentsParticleColor", default: .provider)
+    static let agentsParticleCustomColor = Key<Color>("agentsParticleCustomColor", default: .cyan)
+    static let agentsTokenReadout = Key<AgentTokenReadout>("agentsTokenReadout", default: .sessionTotal)
+    static let agentsClaudeIcon = Key<AgentClaudeIcon>("agentsClaudeIcon", default: .pet)
+    static let agentsAnimatePet = Key<Bool>("agentsAnimatePet", default: true)
+    static let agentsAttentionGlow = Key<Bool>("agentsAttentionGlow", default: true)
+    static let agentsSounds = Key<Bool>("agentsSounds", default: false)
+    static let agentsPauseOnLowPower = Key<Bool>("agentsPauseOnLowPower", default: true)
 }
 
 enum AgentText {
@@ -207,6 +465,66 @@ enum AgentText {
         let plain = text.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
         let collapsed = plain.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
         return collapsed.count > limit ? String(collapsed.prefix(limit)) + "…" : collapsed
+    }
+
+    /// Compact token count, e.g. "940", "12.4k", "1.2M".
+    static func tokens(_ count: Int) -> String {
+        switch count {
+        case ..<1000: return "\(count)"
+        case ..<1_000_000: return compact(Double(count) / 1000, suffix: "k")
+        default: return compact(Double(count) / 1_000_000, suffix: "M")
+        }
+    }
+
+    private static func compact(_ value: Double, suffix: String) -> String {
+        let text = value < 100 ? String(format: "%.1f", value) : String(format: "%.0f", value)
+        return text.replacingOccurrences(of: ".0", with: "") + suffix
+    }
+
+    /// Time since `date`, e.g. "45s", "12m", "1h 5m".
+    static func elapsed(since date: Date, now: Date = .now) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        switch seconds {
+        case ..<60: return "\(seconds)s"
+        case ..<3600: return "\(seconds / 60)m"
+        default: return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+        }
+    }
+
+    /// Shortens a Claude model id, e.g. "claude-opus-5-5" to "Opus 5.5". Other ids pass through.
+    static func modelName(_ model: String) -> String {
+        guard model.hasPrefix("claude-") else { return model }
+        let parts = model.dropFirst("claude-".count).split(separator: "-")
+        guard let family = parts.first else { return model }
+        // A long numeric part is a date stamp rather than a version.
+        let version = parts.dropFirst().filter { $0.count <= 2 && $0.allSatisfy(\.isNumber) }
+        return ([family.capitalized] + (version.isEmpty ? [] : [version.joined(separator: ".")])).joined(separator: " ")
+    }
+
+    /// Replaces the home folder with "~".
+    static func abbreviated(path: String) -> String {
+        path.replacingOccurrences(of: AgentPaths.home.path, with: "~")
+    }
+
+    /// Keeps Markdown intact but bounds what a session holds on to.
+    static func clipped(_ text: String, limit: Int = 8000) -> String {
+        text.count > limit ? String(text.prefix(limit)) + "…" : text
+    }
+
+    /// A shell tool's command, which Codex passes as a list of words.
+    static func commandText(_ input: [String: Any]?) -> String? {
+        if let command = input?["command"] as? String { return command }
+        return (input?["command"] as? [String])?.joined(separator: " ")
+    }
+
+    /// Every field of a tool call, for tools the approval card has no layout for.
+    static func fullInput(_ input: [String: Any]?) -> String {
+        guard let input, !input.isEmpty,
+              let data = try? JSONSerialization.data(
+                withJSONObject: input, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
+              let text = String(data: data, encoding: .utf8)
+        else { return "" }
+        return text
     }
 
     /// A short human description of a tool call from its hook payload.

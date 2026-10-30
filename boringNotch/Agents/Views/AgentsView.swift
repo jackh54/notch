@@ -6,6 +6,7 @@
 //
 
 import Defaults
+import KeyboardShortcuts
 import SwiftUI
 
 struct AgentsView: View {
@@ -19,9 +20,15 @@ struct AgentsView: View {
 
     @Default(.agentsNewTaskProvider) private var newTaskProvider
     @Default(.agentsLastDirectory) private var lastDirectory
+    @Default(.agentsClaudeIcon) private var claudeIcon
 
     private var selected: AgentSession? {
         agents.sessions.first { $0.id == selectedID } ?? agents.primarySession ?? agents.sessions.first
+    }
+
+    /// The row matching the right-hand pane; a pending request takes over that pane.
+    private var highlightedID: String? {
+        agents.currentRequest?.sessionKey ?? selected?.id
     }
 
     private var replyTarget: AgentSession? {
@@ -34,21 +41,22 @@ struct AgentsView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            if agents.sessions.isEmpty {
+            if agents.sessions.isEmpty && agents.currentRequest == nil {
                 emptyState
             } else {
                 HStack(alignment: .top, spacing: 10) {
                     sessionList
-                    if let selected {
-                        AgentDetailView(
-                            session: selected,
-                            approval: agents.approval(for: selected),
-                            question: agents.question(for: selected),
-                            onReply: { beginReply(to: selected) }
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    if let request = agents.currentRequest {
+                        AgentRequestPane(request: request)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } else if let selected {
+                        AgentDetailView(session: selected, onReply: { beginReply(to: selected) })
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
                 }
+            }
+            if let error = agents.lastError {
+                errorStrip(error)
             }
             promptBar
         }
@@ -67,9 +75,15 @@ struct AgentsView: View {
             // Show the session that needs the user rather than whatever was selected before.
             selectedID = nil
         }
-        .onAppear(perform: focusPromptIfRequested)
+        .onAppear {
+            agents.requestViewAppeared()
+            focusPromptIfRequested()
+            // Opening while a banner shows means the user wants to see that session.
+            if let banner = agents.banner { selectedID = banner.sessionKey }
+        }
         .onChange(of: agents.wantsPromptFocus) { focusPromptIfRequested() }
         .onDisappear {
+            agents.requestViewDisappeared()
             agents.isComposing = false
         }
     }
@@ -80,8 +94,11 @@ struct AgentsView: View {
         ScrollView(.vertical) {
             LazyVStack(spacing: 2) {
                 ForEach(agents.sessions) { session in
-                    AgentSessionRow(session: session, isSelected: session.id == selected?.id)
-                        .onTapGesture { selectedID = session.id }
+                    AgentSessionRow(session: session, isSelected: session.id == highlightedID)
+                        .onTapGesture {
+                            selectedID = session.id
+                            agents.showRequest(for: session)
+                        }
                 }
             }
         }
@@ -91,14 +108,48 @@ struct AgentsView: View {
 
     private var emptyState: some View {
         VStack(spacing: 6) {
-            Image(systemName: "sparkle")
-                .imageScale(.large)
-                .foregroundStyle(.gray)
+            AgentProviderIcon(provider: .claude, size: 16)
             Text("No active Claude Code or Codex sessions")
                 .font(.system(.callout, design: .rounded))
                 .foregroundStyle(.gray)
+            Button {
+                agents.openForTyping()
+            } label: {
+                HStack(spacing: 4) {
+                    Text("Start a task in \(AgentText.abbreviated(path: directory))")
+                    if let hint = KeyboardShortcuts.getShortcut(for: .openAgents)?.description {
+                        Text(hint).foregroundStyle(.gray)
+                    }
+                }
+                .font(.system(.caption, design: .rounded))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.8))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func errorStrip(_ error: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text(error)
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(2)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+            Button {
+                agents.lastError = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.gray)
+        }
+        .font(.system(size: 10))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - Prompt
@@ -133,12 +184,6 @@ struct AgentsView: View {
                     vm.close()
                 }
 
-            if let error = agents.lastError {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.yellow)
-                    .help(error)
-            }
-
             Button(action: submit) {
                 Image(systemName: "arrow.up.circle.fill")
                     .imageScale(.large)
@@ -159,13 +204,21 @@ struct AgentsView: View {
                     Button(provider.displayName) { newTaskProvider = provider }
                 }
             } label: {
-                Label(newTaskProvider.shortName, systemImage: newTaskProvider.icon)
-                    .foregroundStyle(newTaskProvider.tint)
+                Label {
+                    Text(newTaskProvider.shortName)
+                } icon: {
+                    if newTaskProvider == .claude, claudeIcon == .pet {
+                        Image(nsImage: AgentPetIcon.image(width: 18, color: newTaskProvider.tint))
+                    } else {
+                        Image(systemName: newTaskProvider.icon)
+                    }
+                }
+                .foregroundStyle(newTaskProvider.tint)
             }
 
             Menu {
                 ForEach(agents.knownDirectories, id: \.self) { path in
-                    Button(path.replacingOccurrences(of: AgentPaths.home.path, with: "~")) { lastDirectory = path }
+                    Button(AgentText.abbreviated(path: path)) { lastDirectory = path }
                 }
                 Divider()
                 Button("Home folder") { lastDirectory = AgentPaths.home.path }
@@ -190,8 +243,7 @@ struct AgentsView: View {
     private func focusPromptIfRequested() {
         guard agents.wantsPromptFocus else { return }
         agents.wantsPromptFocus = false
-        // The notch panel only takes key focus on demand, so ask for it before focusing the field.
-        NSApp.windows.first { $0 is BoringNotchSkyLightWindow && $0.isVisible }?.makeKey()
+        agents.makeNotchKey()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             promptFocused = true
         }
@@ -222,9 +274,7 @@ struct AgentSessionRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Image(systemName: session.provider.icon)
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(session.provider.tint)
+                    AgentProviderIcon(provider: session.provider, mood: AgentPetMood(state: session.state), size: 9)
                     Text(session.title)
                         .font(.system(.caption, design: .rounded).weight(.medium))
                         .foregroundStyle(.white)
@@ -236,9 +286,18 @@ struct AgentSessionRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            if session.state == .idle {
-                Text(session.age())
+            if session.subagentCount > 0 {
+                HStack(spacing: 2) {
+                    Image(systemName: "person.2.fill")
+                    Text("\(session.subagentCount)")
+                }
+                .font(.system(size: 9, design: .rounded))
+                .foregroundStyle(.gray)
+            }
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(trailingTime(now: context.date))
                     .font(.system(size: 9, design: .rounded))
+                    .monospacedDigit()
                     .foregroundStyle(.gray.opacity(0.7))
             }
         }
@@ -249,6 +308,11 @@ struct AgentSessionRow: View {
                 .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
         )
         .contentShape(Rectangle())
+    }
+
+    /// How long a turn has been running, or how long ago an idle session last moved.
+    private func trailingTime(now: Date) -> String {
+        session.turnStartedAt.map { AgentText.elapsed(since: $0, now: now) } ?? session.age(now: now)
     }
 }
 
@@ -271,222 +335,6 @@ struct AgentStateIndicator: View {
             Circle()
                 .fill(state.color.opacity(0.5))
                 .frame(width: 6, height: 6)
-        }
-    }
-}
-
-// MARK: - Detail
-
-struct AgentDetailView: View {
-    let session: AgentSession
-    let approval: AgentApprovalRequest?
-    let question: AgentQuestionRequest?
-    let onReply: () -> Void
-
-    @ObservedObject var agents = AgentManager.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(session.state.label)
-                    .font(.system(.caption2, design: .rounded).weight(.semibold))
-                    .foregroundStyle(session.state.color)
-                Text(session.projectName)
-                    .font(.caption2)
-                    .foregroundStyle(.gray)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                actionButtons
-            }
-
-            if let approval {
-                approvalCard(approval)
-            } else if let question {
-                AgentQuestionCard(request: question)
-                    .id(question.id)
-            } else {
-                ScrollView(.vertical) {
-                    Text(detailText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .scrollIndicators(.never)
-            }
-        }
-        .padding(8)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var detailText: String {
-        if session.state == .working || session.state == .waiting, let activity = session.activity, !activity.isEmpty {
-            return activity
-        }
-        return session.lastMessage ?? session.cwd.replacingOccurrences(of: AgentPaths.home.path, with: "~")
-    }
-
-    private var actionButtons: some View {
-        HStack(spacing: 4) {
-            if agents.isLocalRun(session) {
-                iconButton("xmark", help: session.state == .idle ? "Dismiss" : "Stop and dismiss") {
-                    agents.dismiss(session)
-                }
-            } else {
-                iconButton("arrowshape.turn.up.left", help: session.provider == .claude
-                           ? "Ask a follow-up in a fork of this session"
-                           : "Queue a message to this thread", action: onReply)
-                iconButton("arrow.up.forward.app", help: "Open") { agents.focus(session) }
-            }
-        }
-    }
-
-    private func iconButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 11, weight: .medium))
-                .frame(width: 22, height: 20)
-                .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white)
-        .help(help)
-    }
-
-    private func approvalCard(_ approval: AgentApprovalRequest) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ScrollView(.vertical) {
-                (Text(approval.toolName).fontWeight(.bold).foregroundStyle(.white)
-                    + Text(approval.detail.isEmpty ? "" : "  \(approval.detail)"))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-            .scrollIndicators(.never)
-
-            HStack(spacing: 6) {
-                Button("Deny") { agents.deny(approval) }
-                    .buttonStyle(AgentPillButtonStyle(color: .white.opacity(0.15)))
-                Button("Allow") { agents.allow(approval) }
-                    .buttonStyle(AgentPillButtonStyle(color: .green.opacity(0.7)))
-            }
-        }
-    }
-}
-
-struct AgentPillButtonStyle: ButtonStyle {
-    let color: Color
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(.callout, design: .rounded).weight(.semibold))
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 5)
-            .background(color.opacity(configuration.isPressed ? 0.6 : 1), in: Capsule())
-    }
-}
-
-// MARK: - Question
-
-/// Walks through an agent's questions one at a time and sends the answers back.
-struct AgentQuestionCard: View {
-    let request: AgentQuestionRequest
-
-    @ObservedObject var agents = AgentManager.shared
-    @State private var index = 0
-    @State private var answers: [String: String] = [:]
-    @State private var picked: Set<String> = []
-
-    private var current: AgentQuestion { request.questions[min(index, request.questions.count - 1)] }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                if request.questions.count > 1 {
-                    Text("\(index + 1)/\(request.questions.count)")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(.gray)
-                }
-                Text(current.text)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            ScrollView(.vertical) {
-                VStack(spacing: 5) {
-                    ForEach(current.options, id: \.label) { option in
-                        optionRow(option)
-                    }
-                }
-            }
-            .scrollIndicators(.never)
-
-            HStack(spacing: 6) {
-                Button("Answer in Claude") { agents.answerInAgent(request) }
-                    .buttonStyle(AgentPillButtonStyle(color: .white.opacity(0.15)))
-                if current.multiSelect {
-                    Button(index + 1 < request.questions.count ? "Next" : "Send") {
-                        choose(current.options.map(\.label).filter(picked.contains).joined(separator: ", "))
-                    }
-                    .buttonStyle(AgentPillButtonStyle(color: .green.opacity(0.7)))
-                    .disabled(picked.isEmpty)
-                    .opacity(picked.isEmpty ? 0.5 : 1)
-                }
-            }
-        }
-    }
-
-    private func optionRow(_ option: AgentQuestion.Option) -> some View {
-        let isPicked = picked.contains(option.label)
-        return Button {
-            if current.multiSelect {
-                if isPicked { picked.remove(option.label) } else { picked.insert(option.label) }
-            } else {
-                choose(option.label)
-            }
-        } label: {
-            HStack(spacing: 8) {
-                if current.multiSelect {
-                    Image(systemName: isPicked ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 13))
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(option.label)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                    if !option.detail.isEmpty {
-                        Text(option.detail)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.gray)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .background(Color.white.opacity(isPicked ? 0.22 : 0.1), in: RoundedRectangle(cornerRadius: 8))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white)
-        .help(option.detail)
-    }
-
-    /// Records the answer to the current question and moves on, sending everything after the last one.
-    private func choose(_ answer: String) {
-        answers[current.text] = answer
-        picked = []
-        if index + 1 < request.questions.count {
-            index += 1
-        } else {
-            agents.answer(request, with: answers)
         }
     }
 }

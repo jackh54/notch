@@ -189,10 +189,10 @@ class BoringViewModel: NSObject, ObservableObject {
         return false
     }
 
-    /// The open size for the current content: taller while the Agents tab shows a pending request.
+    /// The open size for the current content: the Agents tab is taller, more so with a pending request.
     private var currentOpenSize: CGSize {
-        coordinator.currentView == .agents && AgentManager.shared.hasPendingRequests
-            ? agentRequestNotchSize : openNotchSize
+        guard coordinator.currentView == .agents else { return openNotchSize }
+        return AgentManager.shared.hasPendingRequests ? agentRequestNotchSize : agentNotchSize
     }
 
     /// Re-applies the open size after the tab or the pending requests change.

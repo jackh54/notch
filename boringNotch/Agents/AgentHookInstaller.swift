@@ -40,6 +40,9 @@ enum AgentHookInstaller {
                 Subscription(event: "PreToolUse", matcher: questionTool, timeout: approvalTimeout),
                 Subscription(event: "Notification", timeout: 5),
                 Subscription(event: "SessionEnd", timeout: 5),
+                Subscription(event: "PostToolUseFailure", timeout: 5),
+                Subscription(event: "SubagentStart", timeout: 5),
+                Subscription(event: "SubagentStop", timeout: 5),
             ]
         case .codex:
             return common
@@ -92,6 +95,14 @@ enum AgentHookInstaller {
                 isOurs($0) && $0["matcher"] as? String == subscription.matcher
             }
         }
+    }
+
+    /// True when hooks from an earlier version are present but newer events are missing.
+    static func needsUpdate(_ provider: AgentProvider) -> Bool {
+        guard !isInstalled(provider),
+              let hooks = readJSON(settingsURL(for: provider))?["hooks"] as? [String: Any]
+        else { return false }
+        return hooks.values.contains { ($0 as? [[String: Any]] ?? []).contains(where: isOurs) }
     }
 
     /// `url` overrides the provider's settings file.

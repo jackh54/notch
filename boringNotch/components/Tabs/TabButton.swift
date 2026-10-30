@@ -15,9 +15,15 @@ struct TabButton: View {
     
     var body: some View {
         Button(action: onClick) {
-            Image(systemName: icon)
-                .padding(.horizontal, 15)
-                .contentShape(Capsule())
+            Group {
+                if label == "Agents" {
+                    AgentTabIcon()
+                } else {
+                    Image(systemName: icon)
+                }
+            }
+            .padding(.horizontal, 15)
+            .contentShape(Capsule())
         }
         .buttonStyle(PlainButtonStyle())
     }

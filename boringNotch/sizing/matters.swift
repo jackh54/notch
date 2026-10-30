@@ -14,6 +14,8 @@ let batterySneakSize: CGSize = .init(width: 160, height: 1)
 
 let shadowPadding: CGFloat = 20
 let openNotchSize: CGSize = .init(width: 640, height: 190)
+/// The Agents tab needs more room than the other tabs for its timeline and messages.
+let agentNotchSize: CGSize = .init(width: openNotchSize.width, height: 240)
 /// The open notch grows to this while an agent is waiting on an answer, so the request is readable.
 let agentRequestNotchSize: CGSize = .init(width: openNotchSize.width, height: 300)
 let windowSize: CGSize = .init(width: openNotchSize.width, height: agentRequestNotchSize.height + shadowPadding)

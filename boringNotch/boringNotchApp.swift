@@ -281,6 +281,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if AgentSnapshots.runIfRequested() { return }
+        #endif
         AgentManager.shared.start()
         // This fork is meant to always be running: turn on launch at login once, then leave it to Settings.
         if !Defaults[.didEnableLaunchAtLogin] {
@@ -377,10 +380,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in AgentManager.shared.openForTyping() }
         }
         KeyboardShortcuts.onKeyDown(for: .allowAgentRequest) {
-            Task { @MainActor in AgentManager.shared.allowOldestApproval() }
+            Task { @MainActor in AgentManager.shared.allowCurrentRequest() }
         }
         KeyboardShortcuts.onKeyDown(for: .denyAgentRequest) {
-            Task { @MainActor in AgentManager.shared.denyOldestApproval() }
+            Task { @MainActor in AgentManager.shared.denyCurrentRequest() }
         }
 
         KeyboardShortcuts.onKeyDown(for: .toggleNotchOpen) { [weak self] in
