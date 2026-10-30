@@ -20,6 +20,7 @@ struct AgentsSettings: View {
     @Default(.agentsParticleCustomColor) var particleCustomColor
     @Default(.agentsTokenReadout) var tokenReadout
     @Default(.agentsClaudeIcon) var claudeIcon
+    @Default(.installCheckInID) var installCheckInID
 
     @State private var installed: [AgentProvider: Bool] = [:]
     @State private var errorMessage: String?
@@ -127,6 +128,27 @@ struct AgentsSettings: View {
                 }
                 .multilineTextAlignment(.leading)
                 .font(.caption)
+            }
+
+            Section {
+                Defaults.Toggle(key: .shareInstallVersion) {
+                    Text("Share which version I'm running")
+                }
+                if !installCheckInID.isEmpty {
+                    HStack {
+                        Text("Install ID")
+                        Spacer()
+                        Text(installCheckInID.prefix(8))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+            } header: {
+                Text("Version sharing")
+            } footer: {
+                Text("Once a day the app sends a random ID and its version number to the developer of this fork, to show which versions are in use. Your name, IP address and activity are not stored. Turning this off deletes the ID and asks the server to forget it. Updates work either way.")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
             }
 
             Section {
