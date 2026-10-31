@@ -370,9 +370,18 @@ enum AgentParticleIntensity: String, CaseIterable, Identifiable, Defaults.Serial
     /// Particles added each time a burst of tokens doubles in size.
     var particlesPerDoubling: Double {
         switch self {
-        case .subtle: return 1.5
-        case .normal: return 3
-        case .lively: return 6
+        case .subtle: return 3
+        case .normal: return 6
+        case .lively: return 12
+        }
+    }
+
+    /// Particles each working session sends through while it isn't reporting tokens.
+    var particlesPerSecond: Double {
+        switch self {
+        case .subtle: return 3
+        case .normal: return 7
+        case .lively: return 12
         }
     }
 }

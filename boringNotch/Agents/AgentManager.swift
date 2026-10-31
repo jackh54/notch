@@ -13,7 +13,12 @@ import SwiftUI
 final class AgentManager: ObservableObject {
     static let shared = AgentManager()
 
-    @Published private(set) var sessions: [AgentSession] = []
+    @Published private(set) var sessions: [AgentSession] = [] {
+        didSet {
+            let working = sessions.filter { $0.state == .working }
+            AgentTokenFlow.shared.setWorking(Dictionary(grouping: working, by: \.provider).mapValues(\.count))
+        }
+    }
     @Published private(set) var approvals: [AgentApprovalRequest] = [] {
         didSet { refreshCurrentRequest() }
     }
@@ -157,6 +162,8 @@ final class AgentManager: ObservableObject {
 
     var attentionCount: Int { sessions.filter { $0.state.needsAttention }.count }
     var workingCount: Int { sessions.filter { $0.state == .working }.count }
+    /// Sessions in the middle of a turn, including those stopped on a question or an approval.
+    var activeCount: Int { sessions.filter { $0.state != .idle }.count }
 
     var workingProviders: Set<AgentProvider> {
         Set(sessions.filter { $0.state == .working }.map(\.provider))

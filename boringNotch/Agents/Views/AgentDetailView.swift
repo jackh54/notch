@@ -36,7 +36,7 @@ struct AgentDetailView: View {
 
             if particles, particlesOpen, session.state != .idle {
                 AgentParticleStream()
-                    .frame(height: 5)
+                    .frame(height: 8)
             }
 
             content

@@ -25,7 +25,7 @@ struct AgentLiveActivity: View {
     static var extraWingWidth: CGFloat {
         let wantsRoom = (Defaults[.agentsParticles] && Defaults[.agentsParticlesClosed])
             || Defaults[.agentsTokenReadout] != .off
-        return wantsRoom ? 28 : 0
+        return wantsRoom ? 34 : 0
     }
 
     private var showsParticles: Bool { particles && particlesClosed }
@@ -33,6 +33,7 @@ struct AgentLiveActivity: View {
     var body: some View {
         HStack {
             leftWing
+                .shadow(color: .black, radius: 2)
                 .frame(width: wingWidth, height: sideLength, alignment: Self.extraWingWidth > 0 ? .leading : .center)
 
             Rectangle()
@@ -40,13 +41,13 @@ struct AgentLiveActivity: View {
                 .frame(width: vm.closedNotchSize.width - cornerRadiusInsets.closed.top)
 
             status
+                .shadow(color: .black, radius: 2)
                 .frame(width: wingWidth, height: sideLength, alignment: Self.extraWingWidth > 0 ? .trailing : .center)
         }
         .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
         .background {
             if showsParticles {
-                AgentParticleStream()
-                    .padding(.vertical, 6)
+                AgentParticleStream(gapWidth: vm.closedNotchSize.width - cornerRadiusInsets.closed.top)
             }
         }
         .overlay(alignment: .bottom) {
@@ -64,6 +65,11 @@ struct AgentLiveActivity: View {
                 Image(systemName: AgentProvider.claude.icon)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.gray)
+            }
+            if Self.extraWingWidth > 0, agents.activeCount > 1 {
+                statusText("\(agents.activeCount)", color: .white)
+                    .padding(.horizontal, 4)
+                    .background(Color(white: 0.2), in: Capsule())
             }
             if agents.workingProviders.count > 1 {
                 VStack(spacing: 2) {
@@ -86,8 +92,9 @@ struct AgentLiveActivity: View {
                 .symbolEffect(.pulse, options: .repeating)
         } else if let readout = agents.closedReadout(tokenReadout) {
             statusText(readout, color: agents.primarySession?.provider.tint ?? .green)
-        } else if agents.workingCount > 1 {
-            statusText("\(agents.workingCount)", color: .green)
+        } else if Self.extraWingWidth == 0, agents.activeCount > 1 {
+            // Without the extra width the left side has no room for its badge.
+            statusText("\(agents.activeCount)", color: .green)
         } else if let started = agents.primarySession?.turnStartedAt {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 statusText(AgentText.elapsed(since: started, now: context.date), color: .green)

@@ -53,6 +53,12 @@ enum AgentSnapshots {
         AgentTokenFlow.shared.loadFixture()
         await render(tab(), size: openSize, to: folder, name: "tab-working")
 
+        agents.loadFixture(sessions: Fixture.parallel)
+        AgentTokenFlow.shared.loadFixture()
+        for frame in 1...4 {
+            await render(closed(), size: closedSize, to: folder, name: "closed-parallel-\(frame)")
+        }
+
         agents.loadFixture(sessions: [Fixture.finished, Fixture.working])
         await render(AgentDetailView(session: Fixture.finished, onReply: {}).background(.black), size: openSize, to: folder, name: "detail-idle")
 
@@ -114,6 +120,12 @@ enum AgentSnapshots {
             ],
             subagentCount: 2, model: "claude-opus-5-5", gitBranch: "feat/agent-notch-polish",
             usage: AgentTokenUsage(input: 1200, output: 11_200))
+
+        static let parallel = [
+            working,
+            AgentSession(provider: .claude, sessionId: "second", title: "Second", cwd: "/tmp", state: .working, updatedAt: now),
+            AgentSession(provider: .codex, sessionId: "third", title: "Third", cwd: "/tmp", state: .working, updatedAt: now),
+        ]
 
         static let finished = AgentSession(
             provider: .codex, sessionId: "finished", title: "Fix the release flow", cwd: "/Users/jack/Documents/GitHub/notch",

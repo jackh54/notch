@@ -109,7 +109,7 @@ enum AgentUsageReader {
     }
 }
 
-/// Turns new tokens into particles. It sits apart from `AgentManager` so the stream can run
+/// Turns working sessions and new tokens into particles. It sits apart from `AgentManager` so the stream can run
 /// without redrawing everything that observes the sessions, and every display shares one flow.
 @MainActor
 final class AgentTokenFlow: ObservableObject {
@@ -123,26 +123,50 @@ final class AgentTokenFlow: ObservableObject {
     }
 
     /// Usage arrives in bursts, one completed message at a time; this spreads a burst out.
-    private static let spreadSeconds: Double = 4
-    private static let minimumRate: Double = 3
-    private static let particleLimit = 40
+    private static let spreadSeconds: Double = 2.5
+    private static let minimumRate: Double = 8
+    private static let particleLimit = 120
     /// With no stream on screen nothing drains, so this stops a backlog from building up.
     private static let backlogLimit: Double = 60
-    private static let lifetimes: ClosedRange<TimeInterval> = 1.2...1.9
-    private static let radii: ClosedRange<CGFloat> = 0.7...1.5
+    private static let lifetimes: ClosedRange<TimeInterval> = 0.9...1.6
+    private static let ambientRadii: ClosedRange<CGFloat> = 0.7...1.3
+    private static let tokenRadii: ClosedRange<CGFloat> = 1.1...2
+    /// Past this many sessions the stream is already busy, and more would only add noise.
+    private static let ambientSessionLimit = 5
+    /// The stream can be paused for minutes, which mustn't come back as one huge step.
+    private static let longestStep: TimeInterval = 0.1
+    private static let portalSpeed: Double = 8
 
     static let shared = AgentTokenFlow()
 
     @Published private(set) var isFlowing = false
+    /// How far the portals have opened, from 0 to 1.
+    private(set) var portalOpenness: Double = 0
+    /// The providers the portals take their colours from. With both working, each gets a portal.
+    private(set) var portalProviders: (entry: AgentProvider, exit: AgentProvider) = (.claude, .claude)
 
     private var particles: [Particle] = []
     private var pending: [AgentProvider: Double] = [:]
+    private var workingSessions: [AgentProvider: Int] = [:]
+    private var ambientDue: [AgentProvider: Double] = [:]
     private var lastTick: Date?
 
     private init() {}
 
-    /// Queues particles for `tokens`. The scale is logarithmic so that 500 tokens and
-    /// 50,000 both look sensible, and no tokens means no particles.
+    /// Keeps a steady trickle going for each working session, because usage only arrives once a
+    /// message completes and a long turn would otherwise look dead.
+    func setWorking(_ sessions: [AgentProvider: Int]) {
+        guard sessions != workingSessions else { return }
+        workingSessions = sessions
+        let busiest = AgentProvider.allCases.filter { sessions[$0] != nil }.sorted { sessions[$0, default: 0] > sessions[$1, default: 0] }
+        if let first = busiest.first, let last = busiest.last {
+            portalProviders = (first, last)
+            isFlowing = true
+        }
+    }
+
+    /// Queues larger particles for `tokens`, on top of the trickle. The scale is logarithmic so
+    /// that 500 tokens and 50,000 both look sensible.
     func add(_ tokens: Int, from provider: AgentProvider) {
         guard tokens > 0, Defaults[.agentsParticles] else { return }
         let added = log2(1 + Double(tokens) / 100) * Defaults[.agentsParticleIntensity].particlesPerDoubling
@@ -153,24 +177,37 @@ final class AgentTokenFlow: ObservableObject {
     /// Advances to `now` and returns the live particles. Every stream shares this, so a second
     /// display sees the same particles rather than taking some from the first.
     func tick(now: Date) -> [Particle] {
-        let elapsed = lastTick.map { now.timeIntervalSince($0) } ?? 0
+        let elapsed = min(lastTick.map { now.timeIntervalSince($0) } ?? 0, Self.longestStep)
         lastTick = now
 
         if elapsed > 0 {
             for (provider, count) in pending {
                 let due = min(count, max(count * elapsed / Self.spreadSeconds, Self.minimumRate * elapsed))
                 let spawned = Int(due.rounded(.down)) + (Double.random(in: 0..<1) < due.truncatingRemainder(dividingBy: 1) ? 1 : 0)
-                for _ in 0..<spawned { spawn(provider, at: now) }
+                for _ in 0..<spawned { spawn(provider, radii: Self.tokenRadii, at: now) }
                 pending[provider] = count - due
             }
             pending = pending.filter { $0.value > 0.01 }
+
+            let rate = Defaults[.agentsParticleIntensity].particlesPerSecond
+            for (provider, sessions) in workingSessions {
+                let due = (ambientDue[provider] ?? 0) + rate * Double(min(sessions, Self.ambientSessionLimit)) * elapsed
+                for _ in 0..<Int(due) { spawn(provider, radii: Self.ambientRadii, at: now) }
+                ambientDue[provider] = due.truncatingRemainder(dividingBy: 1)
+            }
         }
 
         particles.removeAll { now.timeIntervalSince($0.birth) > $0.lifetime }
-        if pending.isEmpty, particles.isEmpty {
+
+        let hasWork = !workingSessions.isEmpty || !pending.isEmpty
+        let portalTarget: Double = hasWork || !particles.isEmpty ? 1 : 0
+        portalOpenness += (portalTarget - portalOpenness) * min(1, elapsed * Self.portalSpeed)
+
+        if !hasWork, particles.isEmpty, portalOpenness < 0.02 {
+            portalOpenness = 0
             // Called while the view is rendering, so the change has to wait for the next turn.
             lastTick = nil
-            DispatchQueue.main.async { self.isFlowing = !self.pending.isEmpty }
+            DispatchQueue.main.async { self.isFlowing = !self.pending.isEmpty || !self.workingSessions.isEmpty }
         }
         return particles
     }
@@ -182,16 +219,17 @@ final class AgentTokenFlow: ObservableObject {
         particles = (0..<30).map { index in
             Particle(
                 provider: index % 4 == 3 ? .codex : .claude, birth: now.addingTimeInterval(0.7 - Double(index) * 0.1),
-                lifetime: 3, lane: .random(in: 0...1), radius: .random(in: Self.radii))
+                lifetime: 3, lane: .random(in: 0...1), radius: .random(in: Self.tokenRadii))
         }
+        portalOpenness = 1
         isFlowing = true
     }
     #endif
 
-    private func spawn(_ provider: AgentProvider, at date: Date) {
+    private func spawn(_ provider: AgentProvider, radii: ClosedRange<CGFloat>, at date: Date) {
         particles.append(Particle(
             provider: provider, birth: date, lifetime: .random(in: Self.lifetimes),
-            lane: .random(in: 0...1), radius: .random(in: Self.radii)))
+            lane: .random(in: 0...1), radius: .random(in: radii)))
         particles.removeFirst(max(0, particles.count - Self.particleLimit))
     }
 }
