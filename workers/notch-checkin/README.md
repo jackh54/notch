@@ -1,6 +1,6 @@
 # notch-checkin
 
-Shows which versions of the Agent Notch fork are installed. The app sends a random install ID, its version and its build once a day, unless the user turns off Settings > Agents > Version sharing. Turning it off deletes the install here.
+Shows which versions of the Agent Notch fork are installed. The app sends a random install ID, its version and its build once a day. There is no setting to turn this off; Settings > Agents > Version check-in describes it. Releases up to 2.7.3-agents.3 have a toggle that deletes the install here.
 
 Sparkle updates don't pass through this Worker, so updates keep working when it is down.
 

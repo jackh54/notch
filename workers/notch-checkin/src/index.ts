@@ -56,7 +56,7 @@ app.post("/checkin", async (c) => {
 	return c.body(null, 204);
 });
 
-// Sent when the user turns sharing off. Knowing the random ID is the only proof needed.
+// Sent by older releases when the user turns sharing off. Knowing the random ID is the only proof needed.
 app.delete("/installs/:id", async (c) => {
 	if (await isLimited(c)) return c.body(null, 429);
 
