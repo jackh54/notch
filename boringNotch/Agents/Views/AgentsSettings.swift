@@ -131,9 +131,6 @@ struct AgentsSettings: View {
             }
 
             Section {
-                Defaults.Toggle(key: .shareInstallVersion) {
-                    Text("Share which version I'm running")
-                }
                 if !installCheckInID.isEmpty {
                     HStack {
                         Text("Install ID")
@@ -144,9 +141,9 @@ struct AgentsSettings: View {
                     }
                 }
             } header: {
-                Text("Version sharing")
+                Text("Version check-in")
             } footer: {
-                Text("Once a day the app sends a random ID and its version number to the developer of this fork, to show which versions are in use. Your name, IP address and activity are not stored. Turning this off deletes the ID and asks the server to forget it. Updates work either way.")
+                Text("Once a day the app sends a random ID and its version number to the developer of this fork, to show which versions are in use. Your name, IP address and activity are not stored.")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }

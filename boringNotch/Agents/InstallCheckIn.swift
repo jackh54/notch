@@ -2,13 +2,12 @@
 //  InstallCheckIn.swift
 //  boringNotch
 //
-//  Tells the fork's server which version this install runs, if the user has allowed it.
-//  Sends a random ID, the version and the build, and nothing else. This is separate from
-//  Sparkle on purpose, so updates keep working whether or not this server is up.
+//  Tells the fork's server which version this install runs. Sends a random ID, the version
+//  and the build, and nothing else. This is separate from Sparkle on purpose, so updates
+//  keep working whether or not this server is up.
 //
 
 import AppKit
-import Combine
 import Defaults
 import Foundation
 
@@ -20,7 +19,6 @@ final class InstallCheckIn {
     private static let pollInterval: Duration = .seconds(60 * 60)
 
     private var pollTask: Task<Void, Never>?
-    private var cancellables: Set<AnyCancellable> = []
     private let session = URLSession(configuration: .ephemeral)
 
     private init() {}
@@ -41,18 +39,6 @@ final class InstallCheckIn {
     }
 
     func start() {
-        Defaults.publisher(.shareInstallVersion)
-            .map(\.newValue)
-            .removeDuplicates()
-            .sink { [weak self] isEnabled in
-                Task { @MainActor in
-                    isEnabled ? self?.enable() : await self?.disable()
-                }
-            }
-            .store(in: &cancellables)
-    }
-
-    private func enable() {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -62,36 +48,15 @@ final class InstallCheckIn {
         }
     }
 
-    /// Stops checking in and asks the server to forget this install. If that request fails
-    /// the server still drops the row once it has gone quiet for long enough.
-    private func disable() async {
-        pollTask?.cancel()
-        pollTask = nil
-
-        let id = Defaults[.installCheckInID]
-        Defaults[.installCheckInID] = ""
-        Defaults[.installCheckInDate] = nil
-        Defaults[.installCheckInBuild] = ""
-
-        guard !id.isEmpty, let url = baseURL?.appendingPathComponent("installs/\(id)") else { return }
-        var request = URLRequest(url: url, timeoutInterval: 15)
-        request.httpMethod = "DELETE"
-        _ = try? await session.data(for: request)
-    }
-
     #if DEBUG
-    /// Runs the real on and off paths against the server in NOTCH_CHECKIN_URL, then quits.
-    /// Pass `--check-in-test` to use it; the pauses leave time to inspect the server.
+    /// Checks in with the server in NOTCH_CHECKIN_URL, then quits. Pass `--check-in-test`
+    /// to use it; the pause leaves time for the request to finish.
     static func runTestIfRequested() -> Bool {
         guard ProcessInfo.processInfo.arguments.contains("--check-in-test") else { return false }
         shared.start()
         Task {
-            Defaults[.shareInstallVersion] = true
             try? await Task.sleep(for: .seconds(4))
             NSLog("check-in test: id \(Defaults[.installCheckInID].prefix(8)), date \(String(describing: Defaults[.installCheckInDate]))")
-            Defaults[.shareInstallVersion] = false
-            try? await Task.sleep(for: .seconds(3))
-            NSLog("check-in test: id now '\(Defaults[.installCheckInID])'")
             NSApp.terminate(nil)
         }
         return true
