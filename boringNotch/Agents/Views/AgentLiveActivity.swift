@@ -14,6 +14,7 @@ struct AgentLiveActivity: View {
 
     @Default(.agentsParticles) private var particles
     @Default(.agentsParticlesClosed) private var particlesClosed
+    @Default(.agentsParticlePortals) private var portals
     @Default(.agentsTokenReadout) private var tokenReadout
     @Default(.agentsAttentionGlow) private var attentionGlow
 
@@ -47,7 +48,8 @@ struct AgentLiveActivity: View {
         .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
         .background {
             if showsParticles {
-                AgentParticleStream(gapWidth: vm.closedNotchSize.width - cornerRadiusInsets.closed.top)
+                // Without portals the particles run straight across behind the camera.
+                AgentParticleStream(gapWidth: portals ? vm.closedNotchSize.width - cornerRadiusInsets.closed.top : 0)
             }
         }
         .overlay(alignment: .bottom) {
