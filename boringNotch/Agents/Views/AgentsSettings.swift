@@ -15,6 +15,7 @@ struct AgentsSettings: View {
     @Default(.agentsOpenOnApproval) var agentsOpenOnApproval
     @Default(.agentsFinishedBanner) var agentsFinishedBanner
     @Default(.agentsParticles) var agentsParticles
+    @Default(.agentsParticlesClosed) var particlesClosed
     @Default(.agentsParticleIntensity) var particleIntensity
     @Default(.agentsParticleColor) var particleColor
     @Default(.agentsParticleCustomColor) var particleCustomColor
@@ -64,6 +65,10 @@ struct AgentsSettings: View {
                     Defaults.Toggle(key: .agentsParticlesClosed) {
                         Text("In the closed notch")
                     }
+                    Defaults.Toggle(key: .agentsParticlePortals) {
+                        Text("Portals beside the camera")
+                    }
+                    .disabled(!particlesClosed)
                     Defaults.Toggle(key: .agentsParticlesOpen) {
                         Text("In the open notch")
                     }

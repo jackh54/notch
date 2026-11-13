@@ -456,6 +456,7 @@ extension Defaults.Keys {
     static let agentsParticles = Key<Bool>("agentsParticles", default: true)
     static let agentsParticlesClosed = Key<Bool>("agentsParticlesClosed", default: true)
     static let agentsParticlesOpen = Key<Bool>("agentsParticlesOpen", default: true)
+    static let agentsParticlePortals = Key<Bool>("agentsParticlePortals", default: true)
     static let agentsParticleIntensity = Key<AgentParticleIntensity>("agentsParticleIntensity", default: .normal)
     static let agentsParticleColor = Key<AgentParticleColor>("agentsParticleColor", default: .provider)
     static let agentsParticleCustomColor = Key<Color>("agentsParticleCustomColor", default: .cyan)
