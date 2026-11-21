@@ -141,15 +141,30 @@ private struct AgentPetFrame {
     }
 }
 
-/// A provider's mark: the pet or a sparkle for Claude, depending on the setting.
+/// A provider's mark: the pet or a sparkle for Claude, depending on the setting,
+/// standing on frost or fire that follows the CPU temperature.
 struct AgentProviderIcon: View {
     let provider: AgentProvider
     var mood: AgentPetMood = .idle
     var size: CGFloat = 10
 
     @Default(.agentsClaudeIcon) private var claudeIcon
+    @Default(.agentsTemperatureEffect) private var temperatureEffect
 
     var body: some View {
+        mark
+            // A dark edge keeps the orange pet readable against the flames.
+            .shadow(color: temperatureEffect ? .black : .clear, radius: size * 0.08)
+            .shadow(color: temperatureEffect ? .black : .clear, radius: size * 0.08)
+            .background(alignment: .bottom) {
+                if temperatureEffect {
+                    AgentTemperatureEffect(size: size)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var mark: some View {
         if provider == .claude, claudeIcon == .pet {
             AgentPetIcon(mood: mood, width: size * 1.5)
         } else {

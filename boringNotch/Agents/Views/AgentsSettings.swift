@@ -97,6 +97,9 @@ struct AgentsSettings: View {
                     Text("Animate the pet")
                 }
                 .disabled(claudeIcon != .pet)
+                Defaults.Toggle(key: .agentsTemperatureEffect) {
+                    Text("Frost or fire under the icon, from the CPU temperature")
+                }
                 Defaults.Toggle(key: .agentsAttentionGlow) {
                     Text("Glow when a session needs you")
                 }
@@ -109,7 +112,7 @@ struct AgentsSettings: View {
             } header: {
                 Text("Notch animation")
             } footer: {
-                Text("Particles only appear when tokens are actually used. Cache reads repeat the whole conversation on every call, so they are left out unless you count them. Reduce Motion in System Settings always stops the animation.")
+                Text("Particles only appear when tokens are actually used. Cache reads repeat the whole conversation on every call, so they are left out unless you count them. The icon stands on frost below 45 °C and on fire from 45 °C, with a blaze from 70 °C. Reduce Motion in System Settings always stops the animation.")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }

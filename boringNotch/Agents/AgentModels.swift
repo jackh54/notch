@@ -463,6 +463,7 @@ extension Defaults.Keys {
     static let agentsTokenReadout = Key<AgentTokenReadout>("agentsTokenReadout", default: .sessionTotal)
     static let agentsClaudeIcon = Key<AgentClaudeIcon>("agentsClaudeIcon", default: .pet)
     static let agentsAnimatePet = Key<Bool>("agentsAnimatePet", default: true)
+    static let agentsTemperatureEffect = Key<Bool>("agentsTemperatureEffect", default: true)
     static let agentsAttentionGlow = Key<Bool>("agentsAttentionGlow", default: true)
     static let agentsSounds = Key<Bool>("agentsSounds", default: false)
     static let agentsPauseOnLowPower = Key<Bool>("agentsPauseOnLowPower", default: true)
